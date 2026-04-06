@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(ls /Users/johannes/Downloads/ac-ledger-rebuild/postcss.config.*)",
+      "Bash(cat /Users/johannes/Downloads/ac-ledger-rebuild/postcss.config.*)",
+      "Skill(claude-api)"
+    ]
+  }
+}
