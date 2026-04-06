@@ -7,7 +7,9 @@
       "Bash(./node_modules/.bin/tsc --noEmit)",
       "Bash(ls /Users/johannes/Downloads/ac-ledger-rebuild/postcss.config.*)",
       "Bash(cat /Users/johannes/Downloads/ac-ledger-rebuild/postcss.config.*)",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "Bash(npm info:*)",
+      "Bash(sudo chown:*)"
     ]
   }
 }
