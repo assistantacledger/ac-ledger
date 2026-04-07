@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Header } from '@/components/layout/Header'
 import { InvoicePDF } from '@/components/invoices/InvoicePDF'
 import { Modal } from '@/components/ui/Modal'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useTemplates } from '@/hooks/useTemplates'
 import { cn, fmt, getNextRef, todayISO } from '@/lib/format'
-import { Plus, Trash2, RefreshCw, Printer, Save, LayoutTemplate } from 'lucide-react'
-import type { Invoice, InvoiceInsert, InvoiceStatus, Entity, LineItem, CompanySettings, PaymentInstalment } from '@/types'
+import { Plus, Trash2, RefreshCw, Printer, Save, LayoutTemplate, Link, Copy, Check } from 'lucide-react'
+import type { Invoice, InvoiceInsert, InvoiceStatus, Entity, LineItem, CompanySettings } from '@/types'
 import { ENTITIES, ENTITY_STORAGE_KEYS } from '@/types'
 
 const STATUSES: InvoiceStatus[] = ['draft', 'pending', 'submitted', 'approved', 'sent', 'overdue', 'part-paid', 'paid']
@@ -61,6 +61,11 @@ export default function GeneratePage() {
   const [templateName, setTemplateName] = useState('')
   const [templateSaved, setTemplateSaved] = useState(false)
 
+  // Client submission link state
+  const [linkEntity, setLinkEntity] = useState<Entity>('Actually Creative')
+  const [linkProject, setLinkProject] = useState('')
+  const [linkCopied, setLinkCopied] = useState(false)
+
   // Load company settings when entity changes
   useEffect(() => {
     setCompany(getCompanySettings(form.entity as Entity))
@@ -91,13 +96,37 @@ export default function GeneratePage() {
   useEffect(() => {
     function calcScale() {
       if (!previewRef.current) return
-      const containerWidth = previewRef.current.clientWidth - 32 // padding
+      const containerWidth = previewRef.current.clientWidth - 32
       setPreviewScale(containerWidth / 794)
     }
     calcScale()
     window.addEventListener('resize', calcScale)
     return () => window.removeEventListener('resize', calcScale)
   }, [])
+
+  // Unique project codes from Supabase invoices, filtered by entity
+  const projectCodes = useMemo(() => {
+    const codes = invoices
+      .filter(i => i.entity === linkEntity && i.project_code)
+      .map(i => i.project_code as string)
+    return Array.from(new Set(codes)).sort()
+  }, [invoices, linkEntity])
+
+  const submissionLink = useMemo(() => {
+    if (typeof window === 'undefined') return ''
+    const base = window.location.origin
+    const params = new URLSearchParams()
+    if (linkProject) params.set('project', linkProject)
+    params.set('entity', linkEntity)
+    return `${base}/supplier?${params.toString()}`
+  }, [linkProject, linkEntity])
+
+  function copyLink() {
+    navigator.clipboard.writeText(submissionLink).then(() => {
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2000)
+    })
+  }
 
   function set<K extends keyof InvoiceInsert>(key: K, val: InvoiceInsert[K]) {
     setSaved(false)
@@ -181,7 +210,7 @@ export default function GeneratePage() {
     }, 1000)
   }
 
-  // Build a preview invoice object (merge form into a fake Invoice)
+  // Preview invoice object — no forPrint id (separate hidden element handles printing)
   const previewInvoice: Invoice = {
     id: 'preview',
     ...form,
@@ -197,21 +226,24 @@ export default function GeneratePage() {
     <>
       <Header title="Generate Invoice" />
 
+      {/* Hidden full-size invoice for window.print() — never shown on screen */}
+      <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+        <InvoicePDF invoice={previewInvoice} company={company} forPrint={true} />
+      </div>
+
       <div className="flex-1 overflow-hidden flex">
         {/* ── Left: Form ────────────────────────────────────────────── */}
         <div className="w-[420px] flex-shrink-0 overflow-y-auto border-r border-rule bg-paper">
           <div className="divide-y divide-rule">
 
             {/* Action bar */}
-            <div className="px-5 py-3 bg-cream flex items-center gap-2">
+            <div className="px-5 py-3 bg-cream flex items-center gap-2 flex-wrap">
               <button
                 onClick={handleSave}
                 disabled={saving || saved}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider transition-colors',
-                  saved
-                    ? 'bg-ac-green text-white'
-                    : 'bg-ink text-white hover:bg-[#333]',
+                  saved ? 'bg-ac-green text-white' : 'bg-ink text-white hover:bg-[#333]',
                   'disabled:opacity-60'
                 )}
               >
@@ -248,7 +280,6 @@ export default function GeneratePage() {
             <div className="px-5 py-5 space-y-4">
               <p className="tbl-lbl">Invoice Details</p>
 
-              {/* Type */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="field-label">Type</label>
@@ -273,7 +304,6 @@ export default function GeneratePage() {
                 </div>
               </div>
 
-              {/* Party */}
               <div>
                 <label className="field-label">
                   {form.type === 'receivable' ? 'Bill To (Client)' : 'Bill From (Supplier)'}
@@ -287,7 +317,6 @@ export default function GeneratePage() {
                 />
               </div>
 
-              {/* Ref + Currency */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="field-label">Invoice Reference</label>
@@ -320,7 +349,6 @@ export default function GeneratePage() {
                 </div>
               </div>
 
-              {/* Due Date + Status */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="field-label">Due Date</label>
@@ -343,7 +371,6 @@ export default function GeneratePage() {
                 </div>
               </div>
 
-              {/* Project */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="field-label">Project Code</label>
@@ -434,7 +461,6 @@ export default function GeneratePage() {
                 </table>
               </div>
 
-              {/* Total */}
               <div className="mt-3 flex justify-end gap-4 items-center">
                 <span className="font-mono text-xs text-muted uppercase tracking-wider">Total</span>
                 <span className="font-mono text-sm font-semibold text-ink">{fmt(lineTotal || form.amount, form.currency)}</span>
@@ -453,6 +479,62 @@ export default function GeneratePage() {
                   placeholder="Payment terms, thank you note…"
                   className="w-full border border-rule bg-white px-3 py-2 text-xs text-ink focus:outline-none focus:border-ink resize-none"
                 />
+              </div>
+            </div>
+
+            {/* Client Submission Link */}
+            <div className="px-5 py-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Link size={11} className="text-muted" />
+                <p className="tbl-lbl">Client Submission Link</p>
+              </div>
+              <p className="font-mono text-[10px] text-muted -mt-1">
+                Share this link so a supplier or client can submit an invoice directly.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="field-label">Entity</label>
+                  <select
+                    value={linkEntity}
+                    onChange={e => { setLinkEntity(e.target.value as Entity); setLinkProject('') }}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink"
+                  >
+                    {ENTITIES.map(e => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="field-label">Project (optional)</label>
+                  <select
+                    value={linkProject}
+                    onChange={e => setLinkProject(e.target.value)}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink"
+                  >
+                    <option value="">No project</option>
+                    {projectCodes.map(code => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  readOnly
+                  value={submissionLink}
+                  className="flex-1 min-w-0 border border-rule bg-cream px-3 py-2 text-xs font-mono text-muted focus:outline-none select-all"
+                  onClick={e => (e.target as HTMLInputElement).select()}
+                />
+                <button
+                  onClick={copyLink}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 border text-xs font-mono uppercase tracking-wider transition-colors flex-shrink-0',
+                    linkCopied
+                      ? 'border-ac-green bg-ac-green-pale text-ac-green'
+                      : 'border-rule text-muted hover:text-ink hover:border-ink'
+                  )}
+                >
+                  {linkCopied ? <><Check size={11} /> Copied</> : <><Copy size={11} /> Copy</>}
+                </button>
               </div>
             </div>
 
@@ -489,10 +571,11 @@ export default function GeneratePage() {
                   left: 0,
                 }}
               >
+                {/* forPrint={false} — print is handled by the hidden element above */}
                 <InvoicePDF
                   invoice={previewInvoice}
                   company={company}
-                  forPrint={true}
+                  forPrint={false}
                 />
               </div>
             </div>

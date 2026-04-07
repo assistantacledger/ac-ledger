@@ -57,6 +57,10 @@ export default function ScanPage() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
+  const [bank, setBank] = useState({
+    accName: '', bankName: '', sortCode: '', accNum: '', iban: '', swift: '',
+  })
+
   const [form, setForm] = useState<Partial<InvoiceInsert>>({
     type: 'payable',
     entity: 'Actually Creative',
@@ -180,7 +184,23 @@ export default function ScanPage() {
           pdf_url = data.publicUrl
         }
       }
-      await createInvoice({ ...(form as InvoiceInsert), pdf_url })
+
+      // Append bank details to notes if any fields are filled
+      const bankLines = [
+        bank.accName  && `Account Name: ${bank.accName}`,
+        bank.bankName && `Bank: ${bank.bankName}`,
+        bank.sortCode && `Sort Code: ${bank.sortCode}`,
+        bank.accNum   && `Account No: ${bank.accNum}`,
+        bank.iban     && `IBAN: ${bank.iban}`,
+        bank.swift    && `SWIFT/BIC: ${bank.swift}`,
+      ].filter(Boolean)
+
+      const notes = [
+        form.notes?.trim(),
+        bankLines.length ? `--- Bank Details ---\n${bankLines.join('\n')}` : null,
+      ].filter(Boolean).join('\n\n') || null
+
+      await createInvoice({ ...(form as InvoiceInsert), pdf_url, notes })
       setSaved(true)
       setTimeout(() => router.push('/payable'), 1200)
     } catch (e) {
@@ -383,6 +403,46 @@ export default function ScanPage() {
                 <label className="field-label">Notes</label>
                 <textarea value={form.notes ?? ''} onChange={e => set('notes', e.target.value || null)}
                   rows={2} className="w-full border border-rule bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink resize-none" />
+              </div>
+            </div>
+
+            {/* Bank Details */}
+            <div className="px-5 py-5 space-y-3">
+              <p className="tbl-lbl">Supplier Bank Details</p>
+              <p className="font-mono text-[10px] text-muted -mt-1">Saved into notes for payment reference.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="field-label">Account Name</label>
+                  <input type="text" value={bank.accName} onChange={e => setBank(b => ({ ...b, accName: e.target.value }))}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
+                </div>
+                <div>
+                  <label className="field-label">Bank Name</label>
+                  <input type="text" value={bank.bankName} onChange={e => setBank(b => ({ ...b, bankName: e.target.value }))}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
+                </div>
+                <div>
+                  <label className="field-label">Sort Code</label>
+                  <input type="text" value={bank.sortCode} onChange={e => setBank(b => ({ ...b, sortCode: e.target.value }))}
+                    placeholder="00-00-00"
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
+                </div>
+                <div>
+                  <label className="field-label">Account Number</label>
+                  <input type="text" value={bank.accNum} onChange={e => setBank(b => ({ ...b, accNum: e.target.value }))}
+                    placeholder="12345678"
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
+                </div>
+                <div>
+                  <label className="field-label">IBAN</label>
+                  <input type="text" value={bank.iban} onChange={e => setBank(b => ({ ...b, iban: e.target.value }))}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
+                </div>
+                <div>
+                  <label className="field-label">SWIFT / BIC</label>
+                  <input type="text" value={bank.swift} onChange={e => setBank(b => ({ ...b, swift: e.target.value }))}
+                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
+                </div>
               </div>
 
               {error && <p className="font-mono text-xs text-red-600">{error}</p>}

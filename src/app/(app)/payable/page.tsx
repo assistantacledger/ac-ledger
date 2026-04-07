@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Header } from '@/components/layout/Header'
 import { InvoiceTable } from '@/components/invoices/InvoiceTable'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
+import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
 import { useInvoices } from '@/hooks/useInvoices'
 import type { Invoice, InvoiceInsert } from '@/types'
 
@@ -11,6 +12,7 @@ export default function PayablePage() {
   const { invoices, loading, error, createInvoice, updateInvoice, markPaid, deleteInvoice } = useInvoices()
   const [editing, setEditing] = useState<Invoice | null>(null)
   const [creating, setCreating] = useState(false)
+  const [previewing, setPreviewing] = useState<Invoice | null>(null)
 
   async function handleSave(data: InvoiceInsert) {
     if (editing) {
@@ -37,6 +39,7 @@ export default function PayablePage() {
           onMarkPaid={inv => markPaid(inv.id)}
           onDelete={deleteInvoice}
           onNew={() => { setEditing(null); setCreating(true) }}
+          onPreview={setPreviewing}
         />
       </main>
 
@@ -48,6 +51,8 @@ export default function PayablePage() {
         defaultType="payable"
         onSave={handleSave}
       />
+
+      <InvoicePreviewModal invoice={previewing} onClose={() => setPreviewing(null)} />
     </>
   )
 }

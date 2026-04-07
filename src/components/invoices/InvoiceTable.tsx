@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { CheckCircle, Pencil, Trash2, Plus, Search } from 'lucide-react'
+import { CheckCircle, Pencil, Trash2, Plus, Search, Eye } from 'lucide-react'
 import { cn, fmt, fmtDate, daysOverdue } from '@/lib/format'
 import type { Invoice, InvoiceType, InvoiceStatus, Entity } from '@/types'
 import { ENTITIES } from '@/types'
@@ -18,6 +18,7 @@ interface InvoiceTableProps {
   onMarkPaid: (invoice: Invoice) => void
   onDelete: (id: string) => void
   onNew: () => void
+  onPreview?: (invoice: Invoice) => void
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -30,7 +31,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function InvoiceTable({
-  invoices, loading, type, onEdit, onMarkPaid, onDelete, onNew,
+  invoices, loading, type, onEdit, onMarkPaid, onDelete, onNew, onPreview,
 }: InvoiceTableProps) {
   const [search, setSearch] = useState('')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
@@ -198,6 +199,15 @@ export function InvoiceTable({
                     </td>
                     <td className="px-5 py-2.5">
                       <div className="row-actions justify-end">
+                        {onPreview && (
+                          <button
+                            onClick={() => onPreview(inv)}
+                            title="Preview PDF"
+                            className="p-1 text-muted hover:text-ink transition-colors"
+                          >
+                            <Eye size={13} />
+                          </button>
+                        )}
                         {inv.status !== 'paid' && (
                           <button
                             onClick={() => onMarkPaid(inv)}
