@@ -187,6 +187,36 @@ export interface InvoiceTemplate {
   createdAt: string
 }
 
+// ─── Project Notes / Files / Costs ───────────────────────────────────────────
+
+export interface ProjectNote {
+  id: string
+  text: string
+  createdAt: string
+}
+
+export interface ProjectFile {
+  id: string
+  name: string
+  url: string
+  type: 'image' | 'pdf'
+  uploadedAt: string
+  path: string  // storage path for deletion
+}
+
+export type CostCategory = 'Equipment' | 'Travel' | 'Crew' | 'Talent' | 'Venue' | 'Software' | 'Marketing' | 'Other'
+export type CostStatus = 'planned' | 'confirmed' | 'paid'
+
+export interface ProjectCost {
+  id: string
+  description: string
+  category: CostCategory
+  estimated: number
+  actual: number
+  status: CostStatus
+  notes: string
+}
+
 // ─── Employee Profiles ───────────────────────────────────────────────────────
 
 export interface EmployeeProfile {

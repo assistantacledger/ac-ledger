@@ -1,10 +1,13 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
 import { Modal } from '@/components/ui/Modal'
+import { ProjectDetail } from '@/components/projects/ProjectDetail'
 import { useProjects } from '@/hooks/useProjects'
 import { useInvoices } from '@/hooks/useInvoices'
+import { useExpenses } from '@/hooks/useExpenses'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { Plus, Pencil, Trash2, FolderOpen } from 'lucide-react'
 import type { Project, Entity, ProjectStatus } from '@/types'
@@ -24,8 +27,12 @@ const blank = (): Omit<Project, 'createdAt'> => ({
 })
 
 export default function ProjectsPage() {
+  const router = useRouter()
   const { projects, createProject, updateProject, deleteProject } = useProjects()
   const { invoices } = useInvoices()
+  const { expenses } = useExpenses()
+
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
   const [form, setForm] = useState(blank())
@@ -33,6 +40,27 @@ export default function ProjectsPage() {
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+
+  // Handle ?open=CODE param from other pages
+  useEffect(() => {
+    if (projects.length === 0) return
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('open')
+    if (code) {
+      const proj = projects.find(p => p.code === code)
+      if (proj) setSelectedProject(proj)
+      // Clean the URL without a full navigation
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [projects])
+
+  // Keep selectedProject in sync if project is updated
+  useEffect(() => {
+    if (selectedProject) {
+      const updated = projects.find(p => p.code === selectedProject.code)
+      if (updated) setSelectedProject(updated)
+    }
+  }, [projects]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openCreate() { setEditing(null); setForm(blank()); setError(''); setModalOpen(true) }
   function openEdit(p: Project) {
@@ -57,8 +85,14 @@ export default function ProjectsPage() {
   }
 
   function handleDelete(code: string) {
-    if (deleteConfirm === code) { deleteProject(code); setDeleteConfirm(null) }
-    else { setDeleteConfirm(code); setTimeout(() => setDeleteConfirm(null), 3000) }
+    if (deleteConfirm === code) {
+      deleteProject(code)
+      setDeleteConfirm(null)
+      if (selectedProject?.code === code) setSelectedProject(null)
+    } else {
+      setDeleteConfirm(code)
+      setTimeout(() => setDeleteConfirm(null), 3000)
+    }
   }
 
   const filtered = useMemo(() => {
@@ -68,7 +102,6 @@ export default function ProjectsPage() {
     return rows
   }, [projects, entityFilter, statusFilter])
 
-  // Per-project invoice totals
   function projectStats(code: string) {
     const inv = invoices.filter(i => i.project_code === code)
     const receivable = inv.filter(i => i.type === 'receivable').reduce((t, i) => t + Number(i.amount), 0)
@@ -86,11 +119,30 @@ export default function ProjectsPage() {
     </>
   )
 
+  // ── Detail view ──────────────────────────────────────────────────────────────
+  if (selectedProject) {
+    return (
+      <>
+        <Header title="Projects" />
+        <ProjectDetail
+          project={selectedProject}
+          invoices={invoices}
+          expenses={expenses}
+          onBack={() => setSelectedProject(null)}
+          onEdit={() => openEdit(selectedProject)}
+        />
+        <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>
+          <ProjectFormBody form={form} set={set} editing={editing} />
+        </Modal>
+      </>
+    )
+  }
+
+  // ── Grid view ─────────────────────────────────────────────────────────────────
   return (
     <>
       <Header title="Projects" />
       <main className="flex-1 overflow-y-auto px-6 py-6">
-
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-3 mb-5">
           <select value={entityFilter} onChange={e => setEntityFilter(e.target.value as Entity | 'all')}
@@ -122,7 +174,11 @@ export default function ProjectsPage() {
               const stats = projectStats(project.code)
               const budgetUsed = project.budget > 0 ? Math.min((stats.receivable / project.budget) * 100, 100) : 0
               return (
-                <div key={project.code} className="tbl-card group">
+                <div
+                  key={project.code}
+                  className="tbl-card group cursor-pointer hover:shadow-md transition-shadow"
+                  onClick={() => setSelectedProject(project)}
+                >
                   <div className="px-5 py-4 border-b border-rule">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -135,7 +191,7 @@ export default function ProjectsPage() {
                           {project.entity === 'Actually Creative' ? 'AC' : project.entity} · {fmtDate(project.date)}
                         </p>
                       </div>
-                      <div className="row-actions flex-shrink-0">
+                      <div className="row-actions flex-shrink-0" onClick={e => e.stopPropagation()}>
                         <button onClick={() => openEdit(project)} className="p-1 text-muted hover:text-ink transition-colors"><Pencil size={13} /></button>
                         <button onClick={() => handleDelete(project.code)}
                           className={cn('p-1 transition-colors', deleteConfirm === project.code ? 'text-red-600' : 'text-muted hover:text-red-500')}>
@@ -174,52 +230,68 @@ export default function ProjectsPage() {
       </main>
 
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Edit · ${editing.code}` : 'New Project'} size="lg" footer={footer}>
-        <div className="px-5 py-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="field-label">Project Code</label>
-              <input type="text" value={form.code} onChange={e => set('code', e.target.value.toUpperCase())} disabled={!!editing}
-                placeholder="AC-24-001"
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink disabled:opacity-50" />
-            </div>
-            <div>
-              <label className="field-label">Status</label>
-              <select value={form.status} onChange={e => set('status', e.target.value as ProjectStatus)}
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none font-mono uppercase">
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="col-span-2">
-              <label className="field-label">Project Name</label>
-              <input type="text" value={form.name} onChange={e => set('name', e.target.value)}
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
-            </div>
-            <div>
-              <label className="field-label">Entity</label>
-              <select value={form.entity} onChange={e => set('entity', e.target.value as Entity)}
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none">
-                {ENTITIES.map(e => <option key={e} value={e}>{e}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="field-label">Start Date</label>
-              <input type="date" value={form.date} onChange={e => set('date', e.target.value)}
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
-            </div>
-            <div className="col-span-2">
-              <label className="field-label">Budget</label>
-              <input type="number" value={form.budget} onChange={e => set('budget', parseFloat(e.target.value) || 0)}
-                min="0" step="100"
-                className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
-            </div>
-            <div className="col-span-2">
-              <label className="field-label">Notes</label>
-              <textarea value={form.notes} onChange={e => set('notes', e.target.value)}
-                rows={3} className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink resize-none" />
-            </div>
-          </div>
-        </div>
+        <ProjectFormBody form={form} set={set} editing={editing} />
       </Modal>
     </>
+  )
+}
+
+// ── Extracted form body (used in both grid and detail views) ─────────────────
+
+function ProjectFormBody({
+  form,
+  set,
+  editing,
+}: {
+  form: Omit<Project, 'createdAt'>
+  set: <K extends keyof Omit<Project, 'createdAt'>>(key: K, val: Omit<Project, 'createdAt'>[K]) => void
+  editing: Project | null
+}) {
+  return (
+    <div className="px-5 py-5 space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="field-label">Project Code</label>
+          <input type="text" value={form.code} onChange={e => set('code', e.target.value.toUpperCase())} disabled={!!editing}
+            placeholder="AC-24-001"
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink disabled:opacity-50" />
+        </div>
+        <div>
+          <label className="field-label">Status</label>
+          <select value={form.status} onChange={e => set('status', e.target.value as ProjectStatus)}
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none font-mono uppercase">
+            {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="col-span-2">
+          <label className="field-label">Project Name</label>
+          <input type="text" value={form.name} onChange={e => set('name', e.target.value)}
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
+        </div>
+        <div>
+          <label className="field-label">Entity</label>
+          <select value={form.entity} onChange={e => set('entity', e.target.value as Entity)}
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none">
+            {ENTITIES.map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="field-label">Start Date</label>
+          <input type="date" value={form.date} onChange={e => set('date', e.target.value)}
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
+        </div>
+        <div className="col-span-2">
+          <label className="field-label">Budget</label>
+          <input type="number" value={form.budget} onChange={e => set('budget', parseFloat(e.target.value) || 0)}
+            min="0" step="100"
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
+        </div>
+        <div className="col-span-2">
+          <label className="field-label">Notes</label>
+          <textarea value={form.notes} onChange={e => set('notes', e.target.value)}
+            rows={3} className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink resize-none" />
+        </div>
+      </div>
+    </div>
   )
 }

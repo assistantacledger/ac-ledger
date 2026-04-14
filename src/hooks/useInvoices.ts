@@ -63,6 +63,10 @@ export function useInvoices() {
     await updateInvoice(id, { status: 'paid' })
   }, [updateInvoice])
 
+  const bulkMarkPaid = useCallback(async (ids: string[]) => {
+    await Promise.all(ids.map(id => updateInvoice(id, { status: 'paid' })))
+  }, [updateInvoice])
+
   const deleteInvoice = useCallback(async (id: string) => {
     const { error } = await sb.from('invoices').delete().eq('id', id)
     if (error) throw error
@@ -77,6 +81,7 @@ export function useInvoices() {
     createInvoice,
     updateInvoice,
     markPaid,
+    bulkMarkPaid,
     deleteInvoice,
   }
 }

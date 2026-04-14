@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { CheckCircle, Pencil, Trash2, Plus, Search, Eye } from 'lucide-react'
+import { CheckCircle, Pencil, Trash2, Plus, Search, Eye, CopyPlus, CheckSquare, Square } from 'lucide-react'
 import { cn, fmt, fmtDate, daysOverdue } from '@/lib/format'
 import type { Invoice, InvoiceType, InvoiceStatus, Entity } from '@/types'
 import { ENTITIES } from '@/types'
@@ -19,6 +19,9 @@ interface InvoiceTableProps {
   onDelete: (id: string) => void
   onNew: () => void
   onPreview?: (invoice: Invoice) => void
+  onDuplicate?: (invoice: Invoice) => void
+  onBulkMarkPaid?: (ids: string[]) => Promise<void>
+  onProjectClick?: (code: string) => void
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -31,12 +34,15 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function InvoiceTable({
-  invoices, loading, type, onEdit, onMarkPaid, onDelete, onNew, onPreview,
+  invoices, loading, type, onEdit, onMarkPaid, onDelete, onNew,
+  onPreview, onDuplicate, onBulkMarkPaid, onProjectClick,
 }: InvoiceTableProps) {
   const [search, setSearch] = useState('')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkPaying, setBulkPaying] = useState(false)
 
   const filtered = useMemo(() => {
     let rows = invoices.filter(i => i.type === type)
@@ -57,6 +63,39 @@ export function InvoiceTable({
 
   const totalAmount = filtered.reduce((t, i) => t + Number(i.amount), 0)
   const label = type === 'payable' ? 'To Pay' : 'Incoming'
+
+  // Selectable = unpaid rows
+  const selectableIds = filtered.filter(i => i.status !== 'paid').map(i => i.id)
+  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id))
+  const someSelected = selected.size > 0
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(selectableIds))
+    }
+  }
+
+  function toggleRow(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handleBulkPaid() {
+    if (!onBulkMarkPaid || selected.size === 0) return
+    setBulkPaying(true)
+    try {
+      await onBulkMarkPaid(Array.from(selected))
+      setSelected(new Set())
+    } finally {
+      setBulkPaying(false)
+    }
+  }
 
   function handleDelete(id: string) {
     if (deleteConfirm === id) {
@@ -122,6 +161,28 @@ export function InvoiceTable({
         </button>
       </div>
 
+      {/* Bulk action bar */}
+      {someSelected && onBulkMarkPaid && (
+        <div className="px-5 py-2.5 bg-ink flex items-center gap-3">
+          <span className="font-mono text-xs text-white">
+            {selected.size} selected
+          </span>
+          <button
+            onClick={handleBulkPaid}
+            disabled={bulkPaying}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            <CheckCircle size={11} /> {bulkPaying ? 'Marking…' : 'Mark All Paid'}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="font-mono text-xs text-[#888] hover:text-white transition-colors ml-auto"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -144,6 +205,13 @@ export function InvoiceTable({
           <table className="w-full">
             <thead>
               <tr className="border-b border-rule bg-paper/50">
+                {onBulkMarkPaid && (
+                  <th className="w-10 px-3 py-2.5">
+                    <button onClick={toggleAll} className="text-muted hover:text-ink transition-colors">
+                      {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+                    </button>
+                  </th>
+                )}
                 <th className="tbl-lbl text-left px-5 py-2.5 w-28">Ref</th>
                 <th className="tbl-lbl text-left px-3 py-2.5">Party</th>
                 <th className="tbl-lbl text-left px-3 py-2.5 hidden lg:table-cell">Entity</th>
@@ -151,22 +219,36 @@ export function InvoiceTable({
                 <th className="tbl-lbl text-left px-3 py-2.5">Due</th>
                 <th className="tbl-lbl text-right px-3 py-2.5">Amount</th>
                 <th className="tbl-lbl text-left px-3 py-2.5">Status</th>
-                <th className="w-24 px-5 py-2.5" />
+                <th className="w-32 px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
               {filtered.map((inv, idx) => {
                 const isOverdue = inv.status === 'overdue'
                 const od = isOverdue ? daysOverdue(inv.due) : 0
+                const isSelectable = inv.status !== 'paid'
                 return (
                   <tr
                     key={inv.id}
                     className={cn(
                       'border-b border-rule last:border-0 transition-colors group',
                       idx % 2 === 1 ? 'bg-paper/40' : '',
-                      'hover:bg-cream/70'
+                      'hover:bg-cream/70',
+                      selected.has(inv.id) && 'bg-blue-50/50'
                     )}
                   >
+                    {onBulkMarkPaid && (
+                      <td className="px-3 py-2.5">
+                        {isSelectable && (
+                          <button
+                            onClick={() => toggleRow(inv.id)}
+                            className="text-muted hover:text-ink transition-colors"
+                          >
+                            {selected.has(inv.id) ? <CheckSquare size={13} className="text-ink" /> : <Square size={13} />}
+                          </button>
+                        )}
+                      </td>
+                    )}
                     <td className="px-5 py-2.5 font-mono text-xs text-ink whitespace-nowrap">
                       {inv.ref || <span className="text-muted">—</span>}
                     </td>
@@ -179,7 +261,11 @@ export function InvoiceTable({
                       </span>
                     </td>
                     <td className="px-3 py-2.5 hidden md:table-cell font-mono text-xs text-muted">
-                      {inv.project_code || '—'}
+                      {inv.project_code ? (
+                        onProjectClick
+                          ? <button onClick={() => onProjectClick(inv.project_code!)} className="hover:text-ink hover:underline transition-colors">{inv.project_code}</button>
+                          : <span>{inv.project_code}</span>
+                      ) : '—'}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">
                       {inv.due ? (
@@ -206,6 +292,15 @@ export function InvoiceTable({
                             className="p-1 text-muted hover:text-ink transition-colors"
                           >
                             <Eye size={13} />
+                          </button>
+                        )}
+                        {onDuplicate && (
+                          <button
+                            onClick={() => onDuplicate(inv)}
+                            title="Duplicate"
+                            className="p-1 text-muted hover:text-ink transition-colors"
+                          >
+                            <CopyPlus size={13} />
                           </button>
                         )}
                         {inv.status !== 'paid' && (

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
 import { InvoiceTable } from '@/components/invoices/InvoiceTable'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
@@ -9,10 +10,12 @@ import { useInvoices } from '@/hooks/useInvoices'
 import type { Invoice, InvoiceInsert } from '@/types'
 
 export default function ReceivablePage() {
-  const { invoices, loading, error, createInvoice, updateInvoice, markPaid, deleteInvoice } = useInvoices()
+  const router = useRouter()
+  const { invoices, loading, error, createInvoice, updateInvoice, markPaid, bulkMarkPaid, deleteInvoice } = useInvoices()
   const [editing, setEditing] = useState<Invoice | null>(null)
   const [creating, setCreating] = useState(false)
   const [previewing, setPreviewing] = useState<Invoice | null>(null)
+  const [duplicateValues, setDuplicateValues] = useState<Partial<InvoiceInsert> | undefined>()
 
   async function handleSave(data: InvoiceInsert) {
     if (editing) {
@@ -20,6 +23,29 @@ export default function ReceivablePage() {
     } else {
       await createInvoice(data)
     }
+  }
+
+  function handleDuplicate(inv: Invoice) {
+    setEditing(null)
+    setDuplicateValues({
+      type: inv.type,
+      party: inv.party,
+      currency: inv.currency,
+      entity: inv.entity,
+      project_code: inv.project_code,
+      project_name: inv.project_name,
+      notes: inv.notes,
+      line_items: inv.line_items,
+      amount: inv.amount,
+      status: 'draft',
+      ref: '',
+      due: null,
+      internal: null,
+      recurring: false,
+      pdf_url: null,
+      payment_schedule: null,
+    })
+    setCreating(true)
   }
 
   return (
@@ -38,17 +64,21 @@ export default function ReceivablePage() {
           onEdit={inv => { setEditing(inv); setCreating(false) }}
           onMarkPaid={inv => markPaid(inv.id)}
           onDelete={deleteInvoice}
-          onNew={() => { setEditing(null); setCreating(true) }}
+          onNew={() => { setEditing(null); setDuplicateValues(undefined); setCreating(true) }}
           onPreview={setPreviewing}
+          onDuplicate={handleDuplicate}
+          onBulkMarkPaid={bulkMarkPaid}
+          onProjectClick={code => router.push(`/projects?open=${code}`)}
         />
       </main>
 
       <InvoiceModal
         isOpen={creating || !!editing}
-        onClose={() => { setCreating(false); setEditing(null) }}
+        onClose={() => { setCreating(false); setEditing(null); setDuplicateValues(undefined) }}
         invoice={editing}
         existingInvoices={invoices}
         defaultType="receivable"
+        defaultValues={duplicateValues}
         onSave={handleSave}
       />
 

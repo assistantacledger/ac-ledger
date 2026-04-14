@@ -19,6 +19,7 @@ interface InvoiceModalProps {
   invoice?: Invoice | null
   existingInvoices: Invoice[]
   defaultType?: 'payable' | 'receivable'
+  defaultValues?: Partial<InvoiceInsert>
   onSave: (data: InvoiceInsert) => Promise<void>
 }
 
@@ -67,7 +68,7 @@ function fromInvoice(inv: Invoice): InvoiceInsert {
 }
 
 export function InvoiceModal({
-  isOpen, onClose, invoice, existingInvoices, defaultType = 'payable', onSave,
+  isOpen, onClose, invoice, existingInvoices, defaultType = 'payable', defaultValues, onSave,
 }: InvoiceModalProps) {
   const [form, setForm] = useState<InvoiceInsert>(() =>
     invoice ? fromInvoice(invoice) : emptyForm(defaultType)
@@ -75,15 +76,18 @@ export function InvoiceModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [refWarn, setRefWarn] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
-      setForm(invoice ? fromInvoice(invoice) : emptyForm(defaultType))
+      const base = invoice ? fromInvoice(invoice) : emptyForm(defaultType)
+      setForm(defaultValues && !invoice ? { ...base, ...defaultValues } : base)
       setError(null)
       setSaving(false)
+      setRefWarn(false)
       setScheduleEnabled(!!(invoice?.payment_schedule?.length))
     }
-  }, [isOpen, invoice, defaultType])
+  }, [isOpen, invoice, defaultType, defaultValues])
 
   // Recompute total from line items whenever they change
   const lineTotal = (form.line_items ?? []).reduce((t, l) => t + Number(l.total), 0)
@@ -153,9 +157,20 @@ export function InvoiceModal({
     set('payment_schedule', (form.payment_schedule ?? []).filter((_, i) => i !== idx))
   }
 
-  async function handleSave() {
+  async function handleSave(force = false) {
     if (!form.party.trim()) { setError('Party is required'); return }
     if (!form.ref.trim()) { setError('Ref / invoice number is required'); return }
+
+    // Duplicate ref check
+    if (!force && form.ref.trim()) {
+      const clash = existingInvoices.some(i =>
+        i.ref?.trim().toLowerCase() === form.ref.trim().toLowerCase() &&
+        (!invoice || i.id !== invoice.id)
+      )
+      if (clash) { setRefWarn(true); return }
+    }
+
+    setRefWarn(false)
     setError(null)
     setSaving(true)
     try {
@@ -174,7 +189,17 @@ export function InvoiceModal({
 
   const footer = (
     <>
-      {error && <p className="text-xs font-mono text-red-600 mr-auto">{error}</p>}
+      <div className="mr-auto space-y-1">
+        {error && <p className="text-xs font-mono text-red-600">{error}</p>}
+        {refWarn && (
+          <p className="text-xs font-mono text-ac-amber">
+            Ref <span className="font-semibold">{form.ref}</span> already exists.{' '}
+            <button onClick={() => handleSave(true)} className="underline hover:no-underline">
+              Save anyway
+            </button>
+          </p>
+        )}
+      </div>
       <button
         onClick={onClose}
         className="px-4 py-2 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
@@ -182,7 +207,7 @@ export function InvoiceModal({
         Cancel
       </button>
       <button
-        onClick={handleSave}
+        onClick={() => handleSave(false)}
         disabled={saving}
         className="px-4 py-2 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50"
       >

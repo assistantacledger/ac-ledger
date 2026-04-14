@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
+import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
 import { useExpenses } from '@/hooks/useExpenses'
 import { cn, fmt, fmtDate } from '@/lib/format'
-import { Plus, Search, CheckCircle, DollarSign, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Search, CheckCircle, DollarSign, Pencil, Trash2, FileText } from 'lucide-react'
 import type { Expense, ExpenseInsert, ExpenseStatus, Entity } from '@/types'
 import { ENTITIES } from '@/types'
 
@@ -16,6 +18,7 @@ const STATUS_BADGE: Record<ExpenseStatus, string> = {
 }
 
 export default function ExpensesPage() {
+  const router = useRouter()
   const { expenses, loading, error, createExpense, updateExpense, setStatus, deleteExpense } = useExpenses()
   const [editing, setEditing] = useState<Expense | null>(null)
   const [creating, setCreating] = useState(false)
@@ -23,6 +26,7 @@ export default function ExpensesPage() {
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [printing, setPrinting] = useState<Expense | null>(null)
 
   const filtered = useMemo(() => {
     let rows = expenses
@@ -52,8 +56,23 @@ export default function ExpensesPage() {
     else { setDeleteConfirm(id); setTimeout(() => setDeleteConfirm(null), 3000) }
   }
 
+  function handlePrint(exp: Expense) {
+    setPrinting(exp)
+    // Allow React to render the hidden element before printing
+    setTimeout(() => {
+      window.print()
+      setPrinting(null)
+    }, 80)
+  }
+
   return (
     <>
+      {/* Hidden expense PDF for window.print() */}
+      {printing && (
+        <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+          <ExpenseReimbursePDF expense={printing} forPrint={true} />
+        </div>
+      )}
       <Header title="Expenses" />
       <main className="flex-1 overflow-y-auto px-6 py-6">
         {error && (
@@ -131,7 +150,9 @@ export default function ExpensesPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2.5 hidden md:table-cell font-mono text-xs text-muted">
-                        {exp.project_code ?? '—'}
+                        {exp.project_code
+                          ? <button onClick={() => router.push(`/projects?open=${exp.project_code}`)} className="hover:text-ink hover:underline transition-colors">{exp.project_code}</button>
+                          : '—'}
                       </td>
                       <td className="px-3 py-2.5 text-sm font-semibold text-right">{fmt(exp.total)}</td>
                       <td className="px-3 py-2.5">
@@ -139,6 +160,10 @@ export default function ExpensesPage() {
                       </td>
                       <td className="px-5 py-2.5">
                         <div className="row-actions justify-end">
+                          <button onClick={() => handlePrint(exp)} title="Print reimbursement PDF"
+                            className="p-1 text-muted hover:text-ink transition-colors">
+                            <FileText size={13} />
+                          </button>
                           {exp.status === 'submitted' && (
                             <button onClick={() => setStatus(exp.id, 'approved')} title="Approve"
                               className="p-1 text-muted hover:text-ac-green transition-colors">
