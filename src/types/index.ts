@@ -215,6 +215,12 @@ export interface ProjectCost {
   actual: number
   status: CostStatus
   notes: string
+  receiptUrl?: string
+  receiptPath?: string
+  receiptType?: 'image' | 'pdf'
+  isEmployeeCost?: boolean
+  employeeName?: string
+  expenseId?: string  // Supabase expense ID once created
 }
 
 // ─── Employee Profiles ───────────────────────────────────────────────────────

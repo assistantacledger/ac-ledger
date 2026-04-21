@@ -36,11 +36,32 @@ export function useProjects() {
     setProjects(updated)
   }, [])
 
+  const renameProjectCode = useCallback((
+    oldCode: string,
+    newCode: string,
+    data: Partial<Omit<Project, 'code' | 'createdAt'>>,
+  ): Project | undefined => {
+    const updated = loadProjects().map(p =>
+      p.code === oldCode ? { ...p, ...data, code: newCode } : p
+    )
+    save(updated)
+    setProjects(updated)
+    // Move localStorage keys (notes, files, costs)
+    for (const suffix of ['notes', 'files', 'costs']) {
+      const val = localStorage.getItem(`project_${suffix}_${oldCode}`)
+      if (val !== null) {
+        localStorage.setItem(`project_${suffix}_${newCode}`, val)
+        localStorage.removeItem(`project_${suffix}_${oldCode}`)
+      }
+    }
+    return updated.find(p => p.code === newCode)
+  }, [])
+
   const deleteProject = useCallback((code: string) => {
     const updated = loadProjects().filter(p => p.code !== code)
     save(updated)
     setProjects(updated)
   }, [])
 
-  return { projects, createProject, updateProject, deleteProject }
+  return { projects, createProject, updateProject, renameProjectCode, deleteProject }
 }

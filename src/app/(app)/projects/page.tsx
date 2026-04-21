@@ -8,6 +8,7 @@ import { ProjectDetail } from '@/components/projects/ProjectDetail'
 import { useProjects } from '@/hooks/useProjects'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useExpenses } from '@/hooks/useExpenses'
+import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { Plus, Pencil, Trash2, FolderOpen } from 'lucide-react'
 import type { Project, Entity, ProjectStatus } from '@/types'
@@ -28,9 +29,9 @@ const blank = (): Omit<Project, 'createdAt'> => ({
 
 export default function ProjectsPage() {
   const router = useRouter()
-  const { projects, createProject, updateProject, deleteProject } = useProjects()
+  const { projects, createProject, updateProject, renameProjectCode, deleteProject } = useProjects()
   const { invoices } = useInvoices()
-  const { expenses } = useExpenses()
+  const { expenses, createExpense } = useExpenses()
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -40,6 +41,7 @@ export default function ProjectsPage() {
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [codeChangeWarn, setCodeChangeWarn] = useState(false)
 
   // Handle ?open=CODE param from other pages
   useEffect(() => {
@@ -62,11 +64,12 @@ export default function ProjectsPage() {
     }
   }, [projects]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openCreate() { setEditing(null); setForm(blank()); setError(''); setModalOpen(true) }
+  function openCreate() { setEditing(null); setForm(blank()); setError(''); setCodeChangeWarn(false); setModalOpen(true) }
   function openEdit(p: Project) {
     setEditing(p)
     setForm({ code: p.code, name: p.name, entity: p.entity, date: p.date, budget: p.budget, status: p.status, notes: p.notes })
     setError('')
+    setCodeChangeWarn(false)
     setModalOpen(true)
   }
 
@@ -74,21 +77,52 @@ export default function ProjectsPage() {
     setForm(f => ({ ...f, [key]: val }))
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!form.code.trim()) { setError('Project code is required'); return }
     if (!form.name.trim()) { setError('Project name is required'); return }
-    if (!editing && projects.find(p => p.code === form.code)) { setError('Project code already exists'); return }
+
+    if (editing) {
+      const codeChanged = form.code !== editing.code
+      if (codeChanged && projects.find(p => p.code === form.code && p.code !== editing.code)) {
+        setError('Project code already exists'); return
+      }
+      if (codeChanged && !codeChangeWarn) {
+        setError(`Changing code from "${editing.code}" to "${form.code}" will update all linked invoices and expenses. Click Save again to confirm.`)
+        setCodeChangeWarn(true)
+        return
+      }
+      if (codeChanged) {
+        const { code: _c, ...rest } = form
+        const renamed = renameProjectCode(editing.code, form.code, rest)
+        await Promise.all([
+          sb.from('invoices').update({ project_code: form.code }).eq('project_code', editing.code),
+          sb.from('expenses').update({ project_code: form.code }).eq('project_code', editing.code),
+        ])
+        if (selectedProject?.code === editing.code && renamed) setSelectedProject(renamed)
+      } else {
+        updateProject(editing.code, form)
+      }
+    } else {
+      if (projects.find(p => p.code === form.code)) { setError('Project code already exists'); return }
+      createProject(form)
+    }
     setError('')
-    if (editing) updateProject(editing.code, form)
-    else createProject(form)
+    setCodeChangeWarn(false)
     setModalOpen(false)
+  }
+
+  function deleteProjectAndCleanup(code: string) {
+    localStorage.removeItem(`project_notes_${code}`)
+    localStorage.removeItem(`project_files_${code}`)
+    localStorage.removeItem(`project_costs_${code}`)
+    deleteProject(code)
+    setSelectedProject(null)
   }
 
   function handleDelete(code: string) {
     if (deleteConfirm === code) {
-      deleteProject(code)
+      deleteProjectAndCleanup(code)
       setDeleteConfirm(null)
-      if (selectedProject?.code === code) setSelectedProject(null)
     } else {
       setDeleteConfirm(code)
       setTimeout(() => setDeleteConfirm(null), 3000)
@@ -130,6 +164,8 @@ export default function ProjectsPage() {
           expenses={expenses}
           onBack={() => setSelectedProject(null)}
           onEdit={() => openEdit(selectedProject)}
+          onDelete={() => deleteProjectAndCleanup(selectedProject.code)}
+          createExpense={createExpense}
         />
         <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>
           <ProjectFormBody form={form} set={set} editing={editing} />
@@ -252,9 +288,9 @@ function ProjectFormBody({
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="field-label">Project Code</label>
-          <input type="text" value={form.code} onChange={e => set('code', e.target.value.toUpperCase())} disabled={!!editing}
+          <input type="text" value={form.code} onChange={e => set('code', e.target.value.toUpperCase())}
             placeholder="AC-24-001"
-            className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink disabled:opacity-50" />
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink" />
         </div>
         <div>
           <label className="field-label">Status</label>

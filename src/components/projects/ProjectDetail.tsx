@@ -1,11 +1,15 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, ExternalLink, ImageIcon } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
+import {
+  ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X,
+  ExternalLink, GripVertical, User, CheckCircle, ImageIcon,
+} from 'lucide-react'
 import { sb } from '@/lib/supabase'
-import { cn, fmt, fmtDate } from '@/lib/format'
+import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import type {
-  Project, Invoice, Expense,
+  Project, Invoice, Expense, ExpenseInsert,
   ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus,
 } from '@/types'
 
@@ -90,10 +94,13 @@ interface Props {
   expenses: Expense[]
   onBack: () => void
   onEdit: () => void
+  onDelete: () => void
+  createExpense: (data: ExpenseInsert) => Promise<Expense>
 }
 
-export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: Props) {
+export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense }: Props) {
   const [tab, setTab] = useState<Tab>('overview')
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState(false)
 
   // Notes
   const [notes, setNotes] = useState<ProjectNote[]>([])
@@ -103,7 +110,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
   // Files
   const [files, setFiles] = useState<ProjectFile[]>([])
   const [uploading, setUploading] = useState(false)
-  const [lightboxFile, setLightboxFile] = useState<ProjectFile | null>(null)
+  const [lightboxUrl, setLightboxUrl] = useState<{ url: string; name: string } | null>(null)
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -114,6 +121,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
     description: '', category: 'Other', estimated: 0, actual: 0, status: 'planned', notes: '',
   })
   const [addingCost, setAddingCost] = useState(false)
+  const [uploadingReceipt, setUploadingReceipt] = useState<string | null>(null)
+  const [creatingExpense, setCreatingExpense] = useState<string | null>(null)
 
   const code = project.code
 
@@ -127,6 +136,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
     setAddingNote(false)
     setAddingCost(false)
     setEditingCost(null)
+    setDeleteConfirmProject(false)
   }, [code])
 
   // ── Filtered data ──
@@ -138,8 +148,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
   const totalCollected = projInvoices.filter(i => i.type === 'receivable' && i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
   const totalOutgoings = projInvoices.filter(i => i.type === 'payable').reduce((t, i) => t + Number(i.amount), 0)
   const totalExpenses = projExpenses.reduce((t, e) => t + Number(e.total), 0)
-  const totalCosts = costs.reduce((t, c) => t + Number(c.actual || c.estimated), 0)
+  // Exclude employee costs that have been promoted to Supabase expenses (avoid double-counting)
+  const totalCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + Number(c.actual || c.estimated), 0)
   const netPosition = totalBillable - totalOutgoings - totalExpenses - totalCosts
+
+  // ── Delete project ──
+  function handleDeleteProject() {
+    if (!deleteConfirmProject) {
+      setDeleteConfirmProject(true)
+      setTimeout(() => setDeleteConfirmProject(false), 4000)
+      return
+    }
+    onDelete()
+  }
 
   // ── Notes ──
   function saveNote() {
@@ -219,13 +240,96 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
     setAddingCost(false)
   }
 
-  function updateCostField(id: string, key: keyof ProjectCost, val: string | number) {
-    saveCosts(costs.map(c => c.id === id ? { ...c, [key]: val } : c))
+  function updateCost(id: string, patch: Partial<ProjectCost>) {
+    saveCosts(costs.map(c => c.id === id ? { ...c, ...patch } : c))
   }
 
   function deleteCost(id: string) {
     saveCosts(costs.filter(c => c.id !== id))
     if (editingCost === id) setEditingCost(null)
+  }
+
+  // Drag-and-drop reorder
+  function handleDragEnd(result: DropResult) {
+    if (!result.destination) return
+    const reordered = Array.from(costs)
+    const [removed] = reordered.splice(result.source.index, 1)
+    reordered.splice(result.destination.index, 0, removed)
+    saveCosts(reordered)
+  }
+
+  // Receipt upload per cost
+  async function handleCostReceiptUpload(costId: string, file: File) {
+    if (!file.type.match(/^(image\/(jpeg|png|gif|webp)|application\/pdf)$/)) {
+      alert('Only JPG, PNG, GIF, WebP, and PDF files are supported.')
+      return
+    }
+    setUploadingReceipt(costId)
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `projects/${code}/costs/${costId}-${Date.now()}-${safeName}`
+      const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
+      if (error) throw error
+      const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
+      updateCost(costId, {
+        receiptUrl: urlData.publicUrl,
+        receiptPath: path,
+        receiptType: file.type.startsWith('image/') ? 'image' : 'pdf',
+      })
+    } catch (e) {
+      alert(`Upload failed: ${String(e)}`)
+    } finally {
+      setUploadingReceipt(null)
+    }
+  }
+
+  function openCostReceiptPicker(costId: string) {
+    const inp = document.createElement('input')
+    inp.type = 'file'
+    inp.accept = 'image/jpeg,image/png,image/gif,image/webp,application/pdf'
+    inp.onchange = (e) => {
+      const f = (e.target as HTMLInputElement).files?.[0]
+      if (f) handleCostReceiptUpload(costId, f)
+    }
+    document.body.appendChild(inp)
+    inp.click()
+    setTimeout(() => document.body.removeChild(inp), 60000)
+  }
+
+  async function removeCostReceipt(costId: string) {
+    const cost = costs.find(c => c.id === costId)
+    if (!cost?.receiptPath) return
+    try { await sb.storage.from('invoices').remove([cost.receiptPath]) } catch { /* ignore */ }
+    updateCost(costId, { receiptUrl: undefined, receiptPath: undefined, receiptType: undefined })
+  }
+
+  // Create Supabase expense from cost
+  async function handleCreateExpense(costId: string) {
+    const cost = costs.find(c => c.id === costId)
+    if (!cost?.employeeName?.trim()) return
+    setCreatingExpense(costId)
+    try {
+      const amount = cost.actual || cost.estimated
+      const data: ExpenseInsert = {
+        employee: cost.employeeName,
+        date: todayISO(),
+        entity: project.entity,
+        status: 'submitted',
+        project_code: project.code,
+        project_name: project.name,
+        notes: cost.description,
+        line_items: [{ description: cost.description, category: 'Other', amount }],
+        receipt_urls: cost.receiptUrl ? [cost.receiptUrl] : null,
+        bank_details: null,
+        total: amount,
+      }
+      const created = await createExpense(data)
+      updateCost(costId, { expenseId: created.id })
+    } catch (e) {
+      alert(`Failed to create expense: ${String(e)}`)
+    } finally {
+      setCreatingExpense(null)
+    }
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -241,7 +345,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
-      <div className="flex-shrink-0 px-6 py-4 border-b border-rule bg-white flex items-center gap-4">
+      <div className="flex-shrink-0 px-6 py-4 border-b border-rule bg-white flex items-center gap-4 flex-wrap">
         <button onClick={onBack} className="flex items-center gap-1.5 font-mono text-xs text-muted hover:text-ink transition-colors">
           <ArrowLeft size={12} /> Projects
         </button>
@@ -255,19 +359,30 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
           {project.entity === 'Actually Creative' ? 'AC' : project.entity}
         </span>
         <div className="flex-1" />
+        <button
+          onClick={handleDeleteProject}
+          className={cn(
+            'flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider transition-colors',
+            deleteConfirmProject
+              ? 'bg-red-600 text-white'
+              : 'border border-rule text-muted hover:text-red-500 hover:border-red-300'
+          )}
+        >
+          <Trash2 size={11} /> {deleteConfirmProject ? 'Confirm Delete' : 'Delete'}
+        </button>
         <button onClick={onEdit} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
           <Pencil size={11} /> Edit
         </button>
       </div>
 
       {/* Tab bar */}
-      <div className="flex-shrink-0 border-b border-rule bg-cream px-6 flex gap-0">
+      <div className="flex-shrink-0 border-b border-rule bg-cream px-6 flex gap-0 overflow-x-auto">
         {TABS.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={cn(
-              'px-4 py-2.5 font-mono text-xs uppercase tracking-wider border-b-2 transition-colors -mb-px',
+              'px-4 py-2.5 font-mono text-xs uppercase tracking-wider border-b-2 transition-colors -mb-px whitespace-nowrap',
               tab === t.key
                 ? 'border-ink text-ink'
                 : 'border-transparent text-muted hover:text-ink'
@@ -284,13 +399,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
         {/* ── Overview ── */}
         {tab === 'overview' && (
           <div className="px-6 py-6 space-y-6">
-            {/* Financial summary */}
             <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
               {[
                 { label: 'Billable', val: totalBillable, sub: `${fmt(totalCollected)} collected`, color: 'before:bg-ac-green' },
                 { label: 'Outgoings', val: totalOutgoings, sub: 'payable invoices', color: 'before:bg-ac-amber' },
                 { label: 'Expenses', val: totalExpenses, sub: `${projExpenses.length} claim${projExpenses.length !== 1 ? 's' : ''}`, color: 'before:bg-blue-500' },
-                { label: 'Costs', val: totalCosts, sub: `${costs.length} line${costs.length !== 1 ? 's' : ''}`, color: 'before:bg-purple-500' },
+                { label: 'Costs', val: totalCosts, sub: `${costs.filter(c => !c.expenseId).length} direct`, color: 'before:bg-purple-500' },
                 {
                   label: 'Net Position', val: netPosition,
                   sub: netPosition >= 0 ? 'surplus' : 'deficit',
@@ -305,7 +419,6 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
               ))}
             </div>
 
-            {/* Budget bar */}
             {project.budget > 0 && (
               <div className="bg-white border border-rule p-4">
                 <div className="flex justify-between items-center mb-2">
@@ -324,7 +437,6 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
               </div>
             )}
 
-            {/* Metadata */}
             <div className="bg-white border border-rule p-4">
               <p className="tbl-lbl mb-3">Project Details</p>
               <dl className="grid grid-cols-2 gap-x-8 gap-y-2">
@@ -447,138 +559,340 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
               {costs.length === 0 && !addingCost ? (
                 <p className="font-mono text-xs text-muted text-center py-12 uppercase tracking-wider">No costs yet</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-rule bg-paper/50">
-                        <th className="tbl-lbl text-left px-4 py-2.5">Description</th>
-                        <th className="tbl-lbl text-left px-3 py-2.5 w-28">Category</th>
-                        <th className="tbl-lbl text-right px-3 py-2.5 w-24">Estimated</th>
-                        <th className="tbl-lbl text-right px-3 py-2.5 w-24">Actual</th>
-                        <th className="tbl-lbl text-left px-3 py-2.5 w-24">Status</th>
-                        <th className="tbl-lbl text-left px-3 py-2.5">Notes</th>
-                        <th className="w-16 px-3 py-2.5" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {costs.map((cost) => (
-                        <tr
-                          key={cost.id}
-                          className="border-b border-rule last:border-0 hover:bg-cream/50 transition-colors group"
-                          onClick={() => setEditingCost(editingCost === cost.id ? null : cost.id)}
-                        >
-                          {editingCost === cost.id ? (
-                            <>
-                              <td className="px-4 py-2" onClick={e => e.stopPropagation()}>
-                                <input value={cost.description} onChange={e => updateCostField(cost.id, 'description', e.target.value)}
+                <DragDropContext onDragEnd={handleDragEnd}>
+                  <Droppable droppableId="costs">
+                    {(provided) => (
+                      <div ref={provided.innerRef} {...provided.droppableProps}>
+                        {/* Column headers */}
+                        <div className="flex items-center border-b border-rule bg-paper/50 px-2 py-2">
+                          <div className="w-6 flex-shrink-0" />
+                          <div className="flex-1 min-w-0 px-2 tbl-lbl">Description</div>
+                          <div className="w-24 px-2 tbl-lbl hidden sm:block">Category</div>
+                          <div className="w-20 px-2 tbl-lbl text-right hidden md:block">Est.</div>
+                          <div className="w-20 px-2 tbl-lbl text-right">Actual</div>
+                          <div className="w-20 px-2 tbl-lbl hidden sm:block">Status</div>
+                          <div className="w-8 flex-shrink-0" />
+                          <div className="w-8 flex-shrink-0" />
+                        </div>
+
+                        {costs.map((cost, index) => (
+                          <Draggable key={cost.id} draggableId={cost.id} index={index}>
+                            {(provided, snapshot) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                className={cn(
+                                  'border-b border-rule last:border-0 group',
+                                  snapshot.isDragging ? 'bg-cream shadow-lg' : index % 2 === 1 ? 'bg-paper/30' : 'bg-white',
+                                )}
+                              >
+                                {/* Main row */}
+                                <div
+                                  className="flex items-center px-2 py-2.5 cursor-pointer hover:bg-cream/50 transition-colors"
+                                  onClick={() => setEditingCost(editingCost === cost.id ? null : cost.id)}
+                                >
+                                  {/* Drag handle */}
+                                  <div
+                                    {...provided.dragHandleProps}
+                                    className="w-6 flex-shrink-0 flex items-center justify-center text-muted hover:text-ink cursor-grab active:cursor-grabbing"
+                                    onClick={e => e.stopPropagation()}
+                                  >
+                                    <GripVertical size={12} />
+                                  </div>
+
+                                  {/* Description + badges */}
+                                  <div className="flex-1 min-w-0 px-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-sm text-ink truncate">{cost.description}</span>
+                                      {cost.expenseId && (
+                                        <span className="badge badge-approved" style={{ fontSize: 9 }}>→ Expense</span>
+                                      )}
+                                      {cost.isEmployeeCost && !cost.expenseId && (
+                                        <span className="badge badge-draft" style={{ fontSize: 9 }}>Employee</span>
+                                      )}
+                                    </div>
+                                    {cost.isEmployeeCost && cost.employeeName && (
+                                      <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
+                                    )}
+                                    {cost.notes && (
+                                      <p className="font-mono text-[10px] text-muted/70 mt-0.5 truncate">{cost.notes}</p>
+                                    )}
+                                  </div>
+
+                                  {/* Category */}
+                                  <div className="w-24 px-2 hidden sm:block">
+                                    <span className="font-mono text-[10px] text-muted uppercase tracking-wider">{cost.category}</span>
+                                  </div>
+
+                                  {/* Estimated */}
+                                  <div className="w-20 px-2 text-right hidden md:block">
+                                    <span className="font-mono text-xs text-muted">{fmt(cost.estimated)}</span>
+                                  </div>
+
+                                  {/* Actual */}
+                                  <div className="w-20 px-2 text-right">
+                                    <span className={cn('font-mono text-xs font-semibold', cost.expenseId ? 'text-muted line-through' : 'text-ink')}>
+                                      {fmt(cost.actual)}
+                                    </span>
+                                  </div>
+
+                                  {/* Status */}
+                                  <div className="w-20 px-2 hidden sm:block">
+                                    <span className={cn('badge', COST_STATUS_CLS[cost.status])}>{cost.status}</span>
+                                  </div>
+
+                                  {/* Receipt icon */}
+                                  <div className="w-8 flex-shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                                    {uploadingReceipt === cost.id ? (
+                                      <div className="w-3 h-3 border border-rule border-t-muted animate-spin" />
+                                    ) : cost.receiptUrl ? (
+                                      <button
+                                        onClick={() => {
+                                          if (cost.receiptType === 'image') {
+                                            setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })
+                                          } else {
+                                            window.open(cost.receiptUrl, '_blank')
+                                          }
+                                        }}
+                                        title="View receipt"
+                                        className="text-ac-green hover:text-[#2d6147] transition-colors"
+                                      >
+                                        {cost.receiptType === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => openCostReceiptPicker(cost.id)}
+                                        title="Upload receipt"
+                                        className="text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100"
+                                      >
+                                        <Upload size={12} />
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Delete */}
+                                  <div className="w-8 flex-shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                                    <button
+                                      onClick={() => deleteCost(cost.id)}
+                                      className="text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Expanded edit panel */}
+                                {editingCost === cost.id && (
+                                  <div className="px-4 py-3 bg-cream/60 border-t border-rule space-y-3" onClick={e => e.stopPropagation()}>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                                      <div className="col-span-2 sm:col-span-3 lg:col-span-2">
+                                        <label className="field-label">Description</label>
+                                        <input value={cost.description}
+                                          onChange={e => updateCost(cost.id, { description: e.target.value })}
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Category</label>
+                                        <select value={cost.category}
+                                          onChange={e => updateCost(cost.id, { category: e.target.value as CostCategory })}
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
+                                          {COST_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Estimated</label>
+                                        <input type="number" value={cost.estimated}
+                                          onChange={e => updateCost(cost.id, { estimated: parseFloat(e.target.value) || 0 })}
+                                          min="0" step="0.01"
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Actual</label>
+                                        <input type="number" value={cost.actual}
+                                          onChange={e => updateCost(cost.id, { actual: parseFloat(e.target.value) || 0 })}
+                                          min="0" step="0.01"
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Status</label>
+                                        <select value={cost.status}
+                                          onChange={e => updateCost(cost.id, { status: e.target.value as CostStatus })}
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
+                                          {COST_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                                        </select>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="field-label">Notes</label>
+                                      <input value={cost.notes}
+                                        onChange={e => updateCost(cost.id, { notes: e.target.value })}
+                                        className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
+                                    </div>
+
+                                    {/* Receipt */}
+                                    <div className="flex items-center gap-3 flex-wrap">
+                                      <span className="field-label">Receipt</span>
+                                      {cost.receiptUrl ? (
+                                        <div className="flex items-center gap-2">
+                                          {cost.receiptType === 'image' ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img src={cost.receiptUrl} alt="receipt"
+                                              className="h-8 w-8 object-cover border border-rule cursor-pointer hover:opacity-80 transition-opacity"
+                                              onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })} />
+                                          ) : (
+                                            <a href={cost.receiptUrl} target="_blank" rel="noopener noreferrer"
+                                              className="flex items-center gap-1 text-muted hover:text-ink text-xs font-mono">
+                                              <FileText size={12} /> PDF
+                                            </a>
+                                          )}
+                                          <button onClick={() => removeCostReceipt(cost.id)}
+                                            className="font-mono text-[10px] text-red-400 hover:text-red-600 transition-colors">
+                                            Remove
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          onClick={() => openCostReceiptPicker(cost.id)}
+                                          disabled={uploadingReceipt === cost.id}
+                                          className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors disabled:opacity-50"
+                                        >
+                                          <Upload size={11} />
+                                          {uploadingReceipt === cost.id ? 'Uploading…' : 'Upload receipt'}
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    {/* Employee cost */}
+                                    <div className="flex items-center gap-3 flex-wrap">
+                                      <span className="field-label">Employee Cost</span>
+                                      <button
+                                        onClick={() => updateCost(cost.id, {
+                                          isEmployeeCost: !cost.isEmployeeCost,
+                                          employeeName: !cost.isEmployeeCost ? (cost.employeeName ?? '') : '',
+                                        })}
+                                        className={cn(
+                                          'flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider border transition-colors',
+                                          cost.isEmployeeCost
+                                            ? 'bg-ink text-white border-ink'
+                                            : 'border-rule text-muted hover:text-ink hover:border-ink'
+                                        )}
+                                      >
+                                        <User size={10} /> {cost.isEmployeeCost ? 'On' : 'Off'}
+                                      </button>
+                                      {cost.isEmployeeCost && (
+                                        <>
+                                          <input
+                                            value={cost.employeeName ?? ''}
+                                            onChange={e => updateCost(cost.id, { employeeName: e.target.value })}
+                                            placeholder="Employee name"
+                                            className="border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none w-40"
+                                          />
+                                          {!cost.expenseId ? (
+                                            <button
+                                              onClick={() => handleCreateExpense(cost.id)}
+                                              disabled={!cost.employeeName?.trim() || creatingExpense === cost.id}
+                                              className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+                                            >
+                                              <CheckCircle size={10} />
+                                              {creatingExpense === cost.id ? 'Creating…' : 'Create Expense'}
+                                            </button>
+                                          ) : (
+                                            <span className="font-mono text-xs text-ac-green flex items-center gap-1">
+                                              <CheckCircle size={10} /> Expense created
+                                            </span>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </Draggable>
+                        ))}
+                        {provided.placeholder}
+
+                        {/* Add cost form */}
+                        {addingCost && (
+                          <div className="border-t border-rule bg-cream/50 px-4 py-3 space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                              <div className="col-span-2 sm:col-span-3 lg:col-span-2">
+                                <label className="field-label">Description</label>
+                                <input value={newCost.description}
+                                  onChange={e => setNewCost(c => ({ ...c, description: e.target.value }))}
+                                  placeholder="e.g. Studio hire" autoFocus
                                   className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
-                              </td>
-                              <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                                <select value={cost.category} onChange={e => updateCostField(cost.id, 'category', e.target.value)}
+                              </div>
+                              <div>
+                                <label className="field-label">Category</label>
+                                <select value={newCost.category}
+                                  onChange={e => setNewCost(c => ({ ...c, category: e.target.value as CostCategory }))}
                                   className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
                                   {COST_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
-                              </td>
-                              <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                                <input type="number" value={cost.estimated} onChange={e => updateCostField(cost.id, 'estimated', parseFloat(e.target.value) || 0)}
-                                  min="0" step="0.01" className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
-                              </td>
-                              <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                                <input type="number" value={cost.actual} onChange={e => updateCostField(cost.id, 'actual', parseFloat(e.target.value) || 0)}
-                                  min="0" step="0.01" className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
-                              </td>
-                              <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                                <select value={cost.status} onChange={e => updateCostField(cost.id, 'status', e.target.value)}
+                              </div>
+                              <div>
+                                <label className="field-label">Estimated</label>
+                                <input type="number" value={newCost.estimated || ''}
+                                  onChange={e => setNewCost(c => ({ ...c, estimated: parseFloat(e.target.value) || 0 }))}
+                                  min="0" step="0.01" placeholder="0.00"
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                              </div>
+                              <div>
+                                <label className="field-label">Actual</label>
+                                <input type="number" value={newCost.actual || ''}
+                                  onChange={e => setNewCost(c => ({ ...c, actual: parseFloat(e.target.value) || 0 }))}
+                                  min="0" step="0.01" placeholder="0.00"
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                              </div>
+                              <div>
+                                <label className="field-label">Status</label>
+                                <select value={newCost.status}
+                                  onChange={e => setNewCost(c => ({ ...c, status: e.target.value as CostStatus }))}
                                   className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
                                   {COST_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
-                              </td>
-                              <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                                <input value={cost.notes} onChange={e => updateCostField(cost.id, 'notes', e.target.value)}
-                                  className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
-                              </td>
-                            </>
-                          ) : (
-                            <>
-                              <td className="px-4 py-2.5 text-sm text-ink">{cost.description}</td>
-                              <td className="px-3 py-2.5 font-mono text-[10px] text-muted uppercase tracking-wider">{cost.category}</td>
-                              <td className="px-3 py-2.5 font-mono text-xs text-muted text-right">{fmt(cost.estimated)}</td>
-                              <td className="px-3 py-2.5 font-mono text-xs font-semibold text-ink text-right">{fmt(cost.actual)}</td>
-                              <td className="px-3 py-2.5">
-                                <span className={cn('badge', COST_STATUS_CLS[cost.status])}>{cost.status}</span>
-                              </td>
-                              <td className="px-3 py-2.5 text-xs text-muted truncate max-w-[120px]">{cost.notes}</td>
-                            </>
-                          )}
-                          <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
-                            <button onClick={() => deleteCost(cost.id)}
-                              className="text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
-                              <Trash2 size={12} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-
-                      {/* Add row */}
-                      {addingCost && (
-                        <tr className="border-b border-rule bg-cream/50">
-                          <td className="px-4 py-2">
-                            <input value={newCost.description} onChange={e => setNewCost(c => ({ ...c, description: e.target.value }))}
-                              placeholder="Description" autoFocus
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
-                          </td>
-                          <td className="px-3 py-2">
-                            <select value={newCost.category} onChange={e => setNewCost(c => ({ ...c, category: e.target.value as CostCategory }))}
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
-                              {COST_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-3 py-2">
-                            <input type="number" value={newCost.estimated || ''} onChange={e => setNewCost(c => ({ ...c, estimated: parseFloat(e.target.value) || 0 }))}
-                              min="0" step="0.01" placeholder="0.00"
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
-                          </td>
-                          <td className="px-3 py-2">
-                            <input type="number" value={newCost.actual || ''} onChange={e => setNewCost(c => ({ ...c, actual: parseFloat(e.target.value) || 0 }))}
-                              min="0" step="0.01" placeholder="0.00"
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
-                          </td>
-                          <td className="px-3 py-2">
-                            <select value={newCost.status} onChange={e => setNewCost(c => ({ ...c, status: e.target.value as CostStatus }))}
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none">
-                              {COST_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-3 py-2">
-                            <input value={newCost.notes} onChange={e => setNewCost(c => ({ ...c, notes: e.target.value }))}
-                              placeholder="Notes"
-                              className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
-                          </td>
-                          <td className="px-3 py-2 flex items-center gap-1">
-                            <button onClick={addCost} className="text-ac-green hover:text-[#2d6147] transition-colors font-mono text-[10px] uppercase">Save</button>
-                            <button onClick={() => setAddingCost(false)} className="text-muted hover:text-ink ml-1"><X size={12} /></button>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="field-label">Notes</label>
+                              <input value={newCost.notes}
+                                onChange={e => setNewCost(c => ({ ...c, notes: e.target.value }))}
+                                placeholder="Optional notes"
+                                className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none"
+                                onKeyDown={e => { if (e.key === 'Enter') addCost() }} />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={addCost}
+                                className="px-3 py-1.5 bg-ink text-white font-mono text-xs uppercase tracking-wider hover:bg-[#333] transition-colors">
+                                Add
+                              </button>
+                              <button onClick={() => setAddingCost(false)}
+                                className="font-mono text-xs text-muted hover:text-ink transition-colors">Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Droppable>
+                </DragDropContext>
               )}
 
               {costs.length > 0 && (
                 <div className="px-4 py-2.5 border-t border-rule bg-cream flex items-center justify-between">
                   <span className="font-mono text-xs text-muted">
                     {costs.length} line{costs.length !== 1 ? 's' : ''}
+                    {costs.some(c => c.expenseId) && (
+                      <span className="ml-1 opacity-60">· {costs.filter(c => c.expenseId).length} in expenses</span>
+                    )}
                     {' · '}Est: {fmt(costs.reduce((t, c) => t + c.estimated, 0))}
                   </span>
-                  <span className="font-mono text-xs font-semibold text-ink">
-                    Actual: {fmt(totalCosts)}
-                  </span>
+                  <span className="font-mono text-xs font-semibold text-ink">Actual: {fmt(totalCosts)}</span>
                 </div>
               )}
             </div>
 
-            <p className="font-mono text-[10px] text-muted">Click a row to edit · Changes save instantly</p>
+            <p className="font-mono text-[10px] text-muted">Click a row to edit · Drag <GripVertical size={10} className="inline" /> to reorder · Changes save instantly</p>
           </div>
         )}
 
@@ -622,10 +936,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
                   {files.map(f => (
                     <div key={f.id} className="group relative border border-rule bg-white overflow-hidden">
-                      {/* Thumbnail or PDF icon */}
                       <button
                         className="w-full aspect-square flex items-center justify-center bg-cream hover:bg-cream/80 transition-colors"
-                        onClick={() => f.type === 'image' ? setLightboxFile(f) : window.open(f.url, '_blank')}
+                        onClick={() => f.type === 'image' ? setLightboxUrl({ url: f.url, name: f.name }) : window.open(f.url, '_blank')}
                         title={f.name}
                       >
                         {f.type === 'image' ? (
@@ -638,7 +951,6 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
                           </div>
                         )}
                       </button>
-                      {/* Delete button */}
                       <button
                         onClick={() => deleteFile(f)}
                         className={cn(
@@ -651,7 +963,6 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
                       >
                         <Trash2 size={9} />
                       </button>
-                      {/* Name */}
                       <div className="px-2 py-1.5 border-t border-rule">
                         <p className="font-mono text-[9px] text-muted truncate">{f.name}</p>
                         <p className="font-mono text-[9px] text-muted/60">{fmtDate(f.uploadedAt)}</p>
@@ -737,8 +1048,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit }: P
       </div>
 
       {/* Image lightbox */}
-      {lightboxFile && (
-        <ImageOverlay url={lightboxFile.url} name={lightboxFile.name} onClose={() => setLightboxFile(null)} />
+      {lightboxUrl && (
+        <ImageOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
       )}
     </div>
   )
