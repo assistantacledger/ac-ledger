@@ -7,11 +7,13 @@ import { InvoiceTable } from '@/components/invoices/InvoiceTable'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
 import { useInvoices } from '@/hooks/useInvoices'
+import { useProjectCodes } from '@/hooks/useProjectCodes'
 import type { Invoice, InvoiceInsert } from '@/types'
 
 export default function PayablePage() {
   const router = useRouter()
   const { invoices, loading, error, createInvoice, updateInvoice, markPaid, bulkMarkPaid, deleteInvoice } = useInvoices()
+  const projectCodes = useProjectCodes(invoices)
   const [editing, setEditing] = useState<Invoice | null>(null)
   const [creating, setCreating] = useState(false)
   const [previewing, setPreviewing] = useState<Invoice | null>(null)
@@ -69,6 +71,8 @@ export default function PayablePage() {
           onDuplicate={handleDuplicate}
           onBulkMarkPaid={bulkMarkPaid}
           onProjectClick={code => router.push(`/projects?open=${code}`)}
+          projectCodes={projectCodes}
+          onAssignProject={async (id, code, name) => { await updateInvoice(id, { project_code: code, project_name: name }) }}
         />
       </main>
 

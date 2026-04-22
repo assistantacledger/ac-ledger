@@ -33,8 +33,8 @@ export default function ProjectsPage() {
   const router = useRouter()
   const { config } = useAuth()
   const { projects, createProject, updateProject, renameProjectCode, deleteProject } = useProjects()
-  const { invoices, createInvoice } = useInvoices()
-  const { expenses, createExpense } = useExpenses()
+  const { invoices, createInvoice, updateInvoice, markPaid } = useInvoices()
+  const { expenses, createExpense, updateExpense } = useExpenses()
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -194,6 +194,9 @@ export default function ProjectsPage() {
           onDelete={() => deleteProjectAndCleanup(selectedProject.code)}
           createExpense={createExpense}
           createInvoice={createInvoice}
+          updateInvoice={updateInvoice}
+          markInvoicePaid={markPaid}
+          updateExpense={updateExpense}
           anthropicKey={config?.anthropicKey}
         />
         <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>

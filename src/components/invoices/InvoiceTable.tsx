@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import { CheckCircle, Pencil, Trash2, Plus, Search, Eye, CopyPlus, CheckSquare, Square, ChevronUp, ChevronDown, ChevronsUpDown, StickyNote } from 'lucide-react'
+import { useState, useMemo, useRef, useEffect } from 'react'
+import { CheckCircle, Pencil, Trash2, Plus, Search, Eye, CopyPlus, CheckSquare, Square, ChevronUp, ChevronDown, ChevronsUpDown, StickyNote, FolderPlus } from 'lucide-react'
 import { cn, fmt, fmtDate, daysOverdue } from '@/lib/format'
 import type { Invoice, InvoiceType, InvoiceStatus, Entity } from '@/types'
 import { ENTITIES } from '@/types'
@@ -25,6 +25,8 @@ interface InvoiceTableProps {
   onDuplicate?: (invoice: Invoice) => void
   onBulkMarkPaid?: (ids: string[]) => Promise<void>
   onProjectClick?: (code: string) => void
+  projectCodes?: { code: string; name: string }[]
+  onAssignProject?: (id: string, code: string, name: string) => Promise<void>
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -39,6 +41,7 @@ function StatusBadge({ status }: { status: string }) {
 export function InvoiceTable({
   invoices, loading, type, onEdit, onMarkPaid, onDelete, onNew,
   onPreview, onDuplicate, onBulkMarkPaid, onProjectClick,
+  projectCodes, onAssignProject,
 }: InvoiceTableProps) {
   const [search, setSearch] = useState('')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
@@ -48,6 +51,16 @@ export function InvoiceTable({
   const [bulkPaying, setBulkPaying] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [assigningProject, setAssigningProject] = useState<string | null>(null)  // invoice id
+  const assignRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function close(e: MouseEvent) {
+      if (assignRef.current && !assignRef.current.contains(e.target as Node)) setAssigningProject(null)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -341,22 +354,39 @@ export function InvoiceTable({
                     <td className="px-5 py-2.5">
                       <div className="row-actions justify-end">
                         {onPreview && (
-                          <button
-                            onClick={() => onPreview(inv)}
-                            title="Preview PDF"
-                            className="p-1 text-muted hover:text-ink transition-colors"
-                          >
+                          <button onClick={() => onPreview(inv)} title="Preview PDF"
+                            className="p-1 text-muted hover:text-ink transition-colors">
                             <Eye size={13} />
                           </button>
                         )}
                         {onDuplicate && (
-                          <button
-                            onClick={() => onDuplicate(inv)}
-                            title="Duplicate"
-                            className="p-1 text-muted hover:text-ink transition-colors"
-                          >
+                          <button onClick={() => onDuplicate(inv)} title="Duplicate"
+                            className="p-1 text-muted hover:text-ink transition-colors">
                             <CopyPlus size={13} />
                           </button>
+                        )}
+                        {onAssignProject && !inv.project_code && projectCodes && projectCodes.length > 0 && (
+                          <div className="relative" ref={assigningProject === inv.id ? assignRef : undefined}>
+                            <button onClick={() => setAssigningProject(p => p === inv.id ? null : inv.id)}
+                              title="Add to project"
+                              className="p-1 text-muted hover:text-ink transition-colors">
+                              <FolderPlus size={13} />
+                            </button>
+                            {assigningProject === inv.id && (
+                              <div className="absolute right-0 bottom-full mb-1 z-30 bg-white border border-rule shadow-xl w-48 max-h-48 overflow-y-auto">
+                                <p className="px-3 py-1.5 tbl-lbl border-b border-rule sticky top-0 bg-white">Add to project</p>
+                                {projectCodes.map(p => (
+                                  <button key={p.code} onClick={async () => {
+                                    await onAssignProject(inv.id, p.code, p.name)
+                                    setAssigningProject(null)
+                                  }} className="w-full flex flex-col px-3 py-2 hover:bg-cream text-left border-b border-rule/50 last:border-0">
+                                    <span className="font-mono text-[10px] text-muted">{p.code}</span>
+                                    <span className="text-xs text-ink truncate">{p.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         )}
                         {inv.status !== 'paid' && (
                           <button

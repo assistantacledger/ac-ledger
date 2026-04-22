@@ -50,13 +50,16 @@ function getCompanySettings(entity: Entity): CompanySettings | null {
 }
 
 export default function GeneratePage() {
-  const { invoices, createInvoice } = useInvoices()
+  const { invoices, createInvoice, updateInvoice } = useInvoices()
   const { saveTemplate } = useTemplates()
   const projectCodes = useProjectCodes(invoices)
   const [form, setForm] = useState<InvoiceInsert>(emptyInvoice)
   const [company, setCompany] = useState<CompanySettings | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [savedInvoiceId, setSavedInvoiceId] = useState<string | null>(null)
+  const [assignProject, setAssignProject] = useState<{ code: string; name: string } | null>(null)
+  const [assigning, setAssigning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const [previewScale, setPreviewScale] = useState(0.5)
@@ -166,8 +169,9 @@ export default function GeneratePage() {
     setError(null)
     setSaving(true)
     try {
-      await createInvoice(form)
+      const created = await createInvoice(form)
       setSaved(true)
+      setSavedInvoiceId(created.id)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -269,6 +273,37 @@ export default function GeneratePage() {
             {error && (
               <div className="px-5 py-2 bg-red-50 border-b border-red-200">
                 <p className="font-mono text-xs text-red-600">{error}</p>
+              </div>
+            )}
+
+            {/* Save to project — shown after saving */}
+            {saved && savedInvoiceId && !form.project_code && (
+              <div className="px-5 py-3 border-b border-rule bg-cream flex items-center gap-3 flex-wrap">
+                <span className="font-mono text-xs text-muted">Assign to project:</span>
+                <ProjectCodeSelect
+                  value={assignProject?.code ?? null}
+                  onChange={(code, name) => setAssignProject(code && name ? { code, name } : null)}
+                  options={projectCodes}
+                  placeholder="Select project…"
+                  className="flex-1 min-w-[200px] max-w-xs"
+                />
+                <button
+                  onClick={async () => {
+                    if (!assignProject || !savedInvoiceId) return
+                    setAssigning(true)
+                    try {
+                      await updateInvoice(savedInvoiceId, { project_code: assignProject.code, project_name: assignProject.name })
+                      setAssignProject(null)
+                      setSavedInvoiceId(null)
+                    } finally {
+                      setAssigning(false)
+                    }
+                  }}
+                  disabled={!assignProject || assigning}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] disabled:opacity-50 transition-colors"
+                >
+                  {assigning ? 'Saving…' : 'Save to Project'}
+                </button>
               </div>
             )}
 

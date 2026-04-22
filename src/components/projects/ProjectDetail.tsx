@@ -5,7 +5,8 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import {
   ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, Eye,
   ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
-  Sparkles, AlertCircle,
+  Sparkles, AlertCircle, Link2, Link2Off, Printer,
+  ChevronUp, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
@@ -13,8 +14,9 @@ import { toast } from '@/lib/toast'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
+import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
 import type {
-  Project, Invoice, Expense, ExpenseInsert, InvoiceInsert,
+  Project, Invoice, Expense, ExpenseInsert, ExpenseUpdate, InvoiceInsert, InvoiceUpdate,
   ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus,
 } from '@/types'
 
@@ -30,6 +32,10 @@ const COST_STATUS_CLS: Record<CostStatus, string> = {
   confirmed: 'badge-submitted',
   paid: 'badge-paid',
 }
+
+type CostSortKey = 'description' | 'category' | 'estimated' | 'actual' | 'status' | 'dueDate' | 'hasInvoice'
+type ReconLinks = { manual: { costId: string; invoiceId: string }[]; broken: { costId: string; invoiceId: string }[] }
+const EMPTY_LINKS: ReconLinks = { manual: [], broken: [] }
 
 // ─── LocalStorage helpers ─────────────────────────────────────────────────────
 
@@ -102,12 +108,25 @@ interface Props {
   onDelete: () => void
   createExpense: (data: ExpenseInsert) => Promise<Expense>
   createInvoice?: (data: InvoiceInsert) => Promise<Invoice>
+  updateInvoice?: (id: string, data: InvoiceUpdate) => Promise<Invoice>
+  markInvoicePaid?: (id: string) => Promise<void>
+  updateExpense?: (id: string, data: ExpenseUpdate) => Promise<Expense>
   anthropicKey?: string
 }
 
-export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, anthropicKey }: Props) {
+export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, anthropicKey }: Props) {
   const [tab, setTab] = useState<Tab>('overview')
   const [deleteConfirmProject, setDeleteConfirmProject] = useState(false)
+  // Invoice editing from project tab
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null)
+  // Expense print
+  const [printingExpense, setPrintingExpense] = useState<Expense | null>(null)
+  // Cost sorting (persisted per project)
+  const [costSortKey, setCostSortKey] = useState<CostSortKey | null>(null)
+  const [costSortDir, setCostSortDir] = useState<'asc' | 'desc'>('asc')
+  // Reconciliation manual links
+  const [reconLinks, setReconLinks] = useState<ReconLinks>(EMPTY_LINKS)
+  const [linkingFrom, setLinkingFrom] = useState<{ side: 'cost' | 'invoice'; id: string } | null>(null)
 
   // Notes
   const [notes, setNotes] = useState<ProjectNote[]>([])
@@ -157,12 +176,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     setNotes(lsGet<ProjectNote[]>(`project_notes_${code}`, []))
     setFiles(lsGet<ProjectFile[]>(`project_files_${code}`, []))
     setCosts(lsGet<ProjectCost[]>(`project_costs_${code}`, []))
+    setReconLinks(lsGet<ReconLinks>(`project_cost_links_${code}`, EMPTY_LINKS))
+    const savedSort = lsGet<{ key: CostSortKey | null; dir: 'asc' | 'desc' } | null>(`project_costs_sort_${code}`, null)
+    if (savedSort) { setCostSortKey(savedSort.key); setCostSortDir(savedSort.dir) }
+    else { setCostSortKey(null); setCostSortDir('asc') }
     setTab('overview')
     setNoteText('')
     setAddingNote(false)
     setAddingCost(false)
     setEditingCost(null)
     setDeleteConfirmProject(false)
+    setLinkingFrom(null)
+    setEditingInvoice(null)
   }, [code])
 
   // ── Filtered data ──
@@ -278,7 +303,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // Drag-and-drop reorder
   function handleDragEnd(result: DropResult) {
     if (!result.destination) return
-    const reordered = Array.from(costs)
+    const reordered = Array.from(displayCosts)
     const [removed] = reordered.splice(result.source.index, 1)
     reordered.splice(result.destination.index, 0, removed)
     saveCosts(reordered)
@@ -378,6 +403,61 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     a.download = `${code}-costs.csv`
     a.click()
     toast('CSV exported')
+  }
+
+  // ── Cost sorting ──
+  function toggleCostSort(key: CostSortKey) {
+    const newDir = costSortKey === key ? (costSortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+    const newKey = costSortKey === key && costSortDir === 'desc' ? null : key
+    const dir = newKey === null ? 'asc' : (costSortKey === key ? newDir : 'asc')
+    setCostSortKey(newKey)
+    setCostSortDir(dir)
+    lsSet(`project_costs_sort_${code}`, { key: newKey, dir })
+  }
+
+  function SortIndicator({ k }: { k: CostSortKey }) {
+    if (costSortKey !== k) return <ChevronsUpDown size={9} className="opacity-30 ml-0.5" />
+    return costSortDir === 'asc' ? <ChevronUp size={9} className="ml-0.5" /> : <ChevronDown size={9} className="ml-0.5" />
+  }
+
+  const displayCosts = costSortKey === null ? costs : [...costs].sort((a, b) => {
+    let av: string | number = '', bv: string | number = ''
+    if (costSortKey === 'description') { av = a.description; bv = b.description }
+    else if (costSortKey === 'category') { av = a.category; bv = b.category }
+    else if (costSortKey === 'estimated') { av = a.estimated; bv = b.estimated }
+    else if (costSortKey === 'actual') { av = a.actual; bv = b.actual }
+    else if (costSortKey === 'status') { av = a.status; bv = b.status }
+    else if (costSortKey === 'dueDate') { av = a.dueDate ?? ''; bv = b.dueDate ?? '' }
+    else if (costSortKey === 'hasInvoice') { av = a.expenseId ? 1 : 0; bv = b.expenseId ? 1 : 0 }
+    if (av < bv) return costSortDir === 'asc' ? -1 : 1
+    if (av > bv) return costSortDir === 'asc' ? 1 : -1
+    return 0
+  })
+
+  // ── Reconciliation links ──
+  function saveReconLinks(next: ReconLinks) {
+    setReconLinks(next)
+    lsSet(`project_cost_links_${code}`, next)
+  }
+
+  function addManualLink(costId: string, invoiceId: string) {
+    // Remove any broken entry for this pair
+    const broken = reconLinks.broken.filter(b => !(b.costId === costId && b.invoiceId === invoiceId))
+    // Remove from manual if already there (shouldn't happen, but safe)
+    const manual = reconLinks.manual.filter(m => m.costId !== costId && m.invoiceId !== invoiceId)
+    saveReconLinks({ manual: [...manual, { costId, invoiceId }], broken })
+    setLinkingFrom(null)
+    toast('Linked cost to invoice')
+  }
+
+  function removeLink(costId: string, invoiceId: string, wasManual: boolean) {
+    if (wasManual) {
+      saveReconLinks({ ...reconLinks, manual: reconLinks.manual.filter(m => !(m.costId === costId && m.invoiceId === invoiceId)) })
+    } else {
+      // Break the auto-match
+      saveReconLinks({ ...reconLinks, broken: [...reconLinks.broken, { costId, invoiceId }] })
+    }
+    toast('Unlinked')
   }
 
   // ── Add invoice as cost ──
@@ -728,72 +808,159 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               const payableInvoices = projInvoices.filter(i => i.type === 'payable')
               const matchedCostIds = new Set<string>()
               const matchedInvIds = new Set<string>()
+              type MatchRow = { costId: string; invoiceId: string; isManual: boolean }
+              const matchRows: MatchRow[] = []
 
-              // Match costs to invoices: amount within 10% OR description similarity
-              const matched: Array<{ cost: ProjectCost; inv: Invoice }> = []
-              for (const cost of costs) {
-                if (cost.expenseId) continue
+              // Manual links first
+              for (const link of reconLinks.manual) {
+                const cost = costs.find(c => c.id === link.costId)
+                const inv = payableInvoices.find(i => i.id === link.invoiceId)
+                if (cost && inv && !matchedCostIds.has(cost.id) && !matchedInvIds.has(inv.id)) {
+                  matchRows.push({ ...link, isManual: true })
+                  matchedCostIds.add(cost.id); matchedInvIds.add(inv.id)
+                }
+              }
+
+              // Auto-match (skip broken, skip already matched, skip employee costs)
+              for (const cost of costs.filter(c => !c.expenseId)) {
+                if (matchedCostIds.has(cost.id)) continue
                 const costAmt = cost.actual || cost.estimated
                 for (const inv of payableInvoices) {
                   if (matchedInvIds.has(inv.id)) continue
+                  if (reconLinks.broken.some(b => b.costId === cost.id && b.invoiceId === inv.id)) continue
                   const invAmt = Number(inv.amount)
                   const amtMatch = costAmt > 0 && Math.abs(costAmt - invAmt) / Math.max(costAmt, invAmt) <= 0.10
-                  const descMatch = cost.description.toLowerCase().includes((inv.party ?? '').toLowerCase().slice(0, 5)) ||
-                    (inv.party ?? '').toLowerCase().includes(cost.description.toLowerCase().slice(0, 5))
+                  const descMatch = cost.description.toLowerCase().includes((inv.party ?? '').toLowerCase().slice(0, 4)) ||
+                    (inv.party ?? '').toLowerCase().includes(cost.description.toLowerCase().slice(0, 4))
                   if (amtMatch || (descMatch && invAmt > 0)) {
-                    matched.push({ cost, inv })
-                    matchedCostIds.add(cost.id)
-                    matchedInvIds.add(inv.id)
-                    break
+                    matchRows.push({ costId: cost.id, invoiceId: inv.id, isManual: false })
+                    matchedCostIds.add(cost.id); matchedInvIds.add(inv.id); break
                   }
                 }
               }
-              const unmatchedCosts = costs.filter(c => !c.expenseId && !matchedCostIds.has(c.id))
-              const unlinkedInvoices = payableInvoices.filter(i => !matchedInvIds.has(i.id))
 
-              if (matched.length === 0 && unmatchedCosts.length === 0 && unlinkedInvoices.length === 0) return null
+              const unmatchedCosts = costs.filter(c => !c.expenseId && !matchedCostIds.has(c.id))
+              const unmatchedInvoices = payableInvoices.filter(i => !matchedInvIds.has(i.id))
+
+              if (matchRows.length === 0 && unmatchedCosts.length === 0 && unmatchedInvoices.length === 0) return null
+
               return (
-                <div className="bg-white border border-rule">
-                  <div className="px-4 py-3 border-b border-rule flex items-center justify-between">
+                <div className="bg-white border border-rule" onClick={() => setLinkingFrom(null)}>
+                  <div className="px-4 py-3 border-b border-rule flex items-center gap-3">
                     <p className="tbl-lbl">Cost Reconciliation</p>
-                    <span className="font-mono text-[10px] text-muted">{matched.length} matched · {unmatchedCosts.length} unmatched · {unlinkedInvoices.length} unlinked</span>
+                    <span className="font-mono text-[10px]"><span className="text-ac-green">{matchRows.length} matched</span> · <span className="text-ac-amber">{unmatchedCosts.length} unmatched</span> · <span className="text-blue-500">{unmatchedInvoices.length} unlinked</span></span>
                   </div>
-                  <div className="divide-y divide-rule">
-                    {matched.map(({ cost, inv }) => (
-                      <div key={cost.id} className="px-4 py-2.5 flex items-center gap-3 bg-green-50/40">
-                        <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs text-ink">{cost.description}</span>
-                          <span className="font-mono text-[10px] text-muted ml-2">→ {inv.party} {inv.ref ? `(${inv.ref})` : ''}</span>
+
+                  {/* Column labels */}
+                  <div className="grid grid-cols-[1fr_32px_1fr] border-b border-rule bg-paper/50">
+                    <div className="px-4 py-1.5 tbl-lbl">Costs</div>
+                    <div />
+                    <div className="px-4 py-1.5 tbl-lbl">Payable Invoices</div>
+                  </div>
+
+                  {/* Matched pairs */}
+                  {matchRows.map(({ costId, invoiceId, isManual }) => {
+                    const cost = costs.find(c => c.id === costId)!
+                    const inv = payableInvoices.find(i => i.id === invoiceId)!
+                    return (
+                      <div key={`${costId}-${invoiceId}`} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0 bg-green-50/30">
+                        <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
+                          <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs text-ink truncate">{cost.description}</p>
+                            <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
+                          </div>
                         </div>
-                        <span className="font-mono text-xs text-ink">{fmt(cost.actual || cost.estimated)}</span>
-                        <span className="badge badge-paid text-[9px]">matched</span>
+                        <div className="flex items-center justify-center">
+                          <button onClick={e => { e.stopPropagation(); removeLink(costId, invoiceId, isManual) }}
+                            title="Unlink" className="text-ac-green hover:text-red-500 transition-colors">
+                            <Link2 size={13} />
+                          </button>
+                        </div>
+                        <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
+                          <div className="min-w-0">
+                            <p className="text-xs text-ink truncate">{inv.party}</p>
+                            <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount, inv.currency)}</p>
+                          </div>
+                          {isManual && <span className="font-mono text-[9px] text-ac-green flex-shrink-0">manual</span>}
+                        </div>
                       </div>
-                    ))}
-                    {unmatchedCosts.map(cost => (
-                      <div key={cost.id} className="px-4 py-2.5 flex items-center gap-3">
+                    )
+                  })}
+
+                  {/* Unmatched costs (left only) */}
+                  {unmatchedCosts.map(cost => (
+                    <div key={cost.id} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0">
+                      <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
                         <div className="w-2 h-2 rounded-full bg-ac-amber flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs text-ink">{cost.description}</span>
-                          <span className="font-mono text-[10px] text-muted ml-2">no linked invoice</span>
+                        <div className="min-w-0">
+                          <p className="text-xs text-ink truncate">{cost.description}</p>
+                          <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
                         </div>
-                        <span className="font-mono text-xs text-muted">{fmt(cost.actual || cost.estimated)}</span>
-                        <span className="badge badge-pending text-[9px]">unmatched</span>
                       </div>
-                    ))}
-                    {unlinkedInvoices.map(inv => (
-                      <div key={inv.id} className="px-4 py-2.5 flex items-center gap-3 bg-paper/40">
-                        <div className="w-2 h-2 rounded-full bg-muted flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs text-ink">{inv.party}</span>
-                          {inv.ref && <span className="font-mono text-[10px] text-muted ml-2">{inv.ref}</span>}
-                          <span className="font-mono text-[10px] text-muted ml-2">no matching cost</span>
+                      <div className="flex items-center justify-center">
+                        <button onClick={e => { e.stopPropagation(); setLinkingFrom(f => f?.id === cost.id ? null : { side: 'cost', id: cost.id }) }}
+                          title="Link to invoice" className="text-muted hover:text-ink transition-colors">
+                          <Link2Off size={13} />
+                        </button>
+                      </div>
+                      <div className="px-4 py-2.5 relative">
+                        {linkingFrom?.id === cost.id && linkingFrom.side === 'cost' && (
+                          <div className="absolute left-2 top-0 z-10 bg-white border border-rule shadow-lg min-w-[200px]" onClick={e => e.stopPropagation()}>
+                            <p className="px-3 py-1.5 tbl-lbl border-b border-rule">Link to invoice</p>
+                            {unmatchedInvoices.length === 0
+                              ? <p className="px-3 py-2 font-mono text-[10px] text-muted">No unlinked invoices</p>
+                              : unmatchedInvoices.map(inv => (
+                                <button key={inv.id} onClick={() => addManualLink(cost.id, inv.id)}
+                                  className="w-full flex items-start gap-2 px-3 py-2 hover:bg-cream text-left border-b border-rule last:border-0">
+                                  <div>
+                                    <p className="text-xs text-ink">{inv.party}</p>
+                                    <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount)}</p>
+                                  </div>
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Unmatched invoices (right only) */}
+                  {unmatchedInvoices.map(inv => (
+                    <div key={inv.id} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0">
+                      <div className="px-4 py-2.5 relative">
+                        {linkingFrom?.id === inv.id && linkingFrom.side === 'invoice' && (
+                          <div className="absolute right-2 top-0 z-10 bg-white border border-rule shadow-lg min-w-[200px]" onClick={e => e.stopPropagation()}>
+                            <p className="px-3 py-1.5 tbl-lbl border-b border-rule">Link to cost</p>
+                            {unmatchedCosts.length === 0
+                              ? <p className="px-3 py-2 font-mono text-[10px] text-muted">No unmatched costs</p>
+                              : unmatchedCosts.map(cost => (
+                                <button key={cost.id} onClick={() => addManualLink(cost.id, inv.id)}
+                                  className="w-full flex items-start gap-2 px-3 py-2 hover:bg-cream text-left border-b border-rule last:border-0">
+                                  <div>
+                                    <p className="text-xs text-ink">{cost.description}</p>
+                                    <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
+                                  </div>
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-center">
+                        <button onClick={e => { e.stopPropagation(); setLinkingFrom(f => f?.id === inv.id ? null : { side: 'invoice', id: inv.id }) }}
+                          title="Link to cost" className="text-muted hover:text-blue-500 transition-colors">
+                          <Link2Off size={13} />
+                        </button>
+                      </div>
+                      <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
+                        <div className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs text-ink truncate">{inv.party}</p>
+                          <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount, inv.currency)}</p>
                         </div>
-                        <span className="font-mono text-xs text-muted">{fmt(inv.amount, inv.currency)}</span>
-                        <span className="badge badge-draft text-[9px]">unlinked</span>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
               )
             })()}
@@ -838,22 +1005,37 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                             sent: 'badge-sent', 'part-paid': 'badge-part-paid',
                           }[inv.status] ?? 'badge-draft')}>{inv.status}</span>
                         </td>
-                        <td className="px-4 py-2.5">
-                          <div className="row-actions justify-end">
-                            <button
-                              onClick={() => setPreviewInvoice(inv)}
-                              title="Preview PDF"
-                              className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100"
-                            >
-                              <Eye size={13} />
+                        <td className="px-4 py-2">
+                          <div className="row-actions justify-end gap-1">
+                            <button onClick={() => setPreviewInvoice(inv)} title="Preview PDF"
+                              className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100">
+                              <Eye size={12} />
                             </button>
-                            <button
-                              onClick={() => addCostFromInvoice(inv)}
-                              title="Add to costs"
-                              className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink border border-transparent hover:border-rule transition-all opacity-0 group-hover:opacity-100 whitespace-nowrap"
-                            >
-                              → Costs
+                            {updateInvoice && (
+                              <button onClick={() => setEditingInvoice(inv)} title="Edit"
+                                className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100">
+                                <Pencil size={12} />
+                              </button>
+                            )}
+                            {markInvoicePaid && inv.status !== 'paid' && (
+                              <button onClick={() => markInvoicePaid(inv.id)} title="Mark paid"
+                                className="p-1 text-muted hover:text-ac-green transition-colors opacity-0 group-hover:opacity-100">
+                                <CheckCircle size={12} />
+                              </button>
+                            )}
+                            <button onClick={() => addCostFromInvoice(inv)} title="Add to costs"
+                              className="font-mono text-[10px] px-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 whitespace-nowrap">
+                              → Cost
                             </button>
+                            {updateInvoice && (
+                              <button onClick={async () => {
+                                await updateInvoice(inv.id, { project_code: null, project_name: null })
+                                toast('Unlinked from project')
+                              }} title="Unlink from project"
+                                className="p-1 text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
+                                <Link2Off size={12} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -908,24 +1090,27 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           <span className="font-mono text-sm font-semibold text-ink whitespace-nowrap">{fmt(exp.total)}</span>
 
                           {/* Actions */}
-                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex-wrap">
                             {exp.status === 'submitted' && (
-                              <button
-                                onClick={() => approveExpense(exp.id)}
-                                disabled={approvingExpense === exp.id}
-                                title="Approve expense"
-                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 bg-ac-green text-white hover:opacity-90 transition-opacity disabled:opacity-50 uppercase tracking-wider"
-                              >
+                              <button onClick={() => approveExpense(exp.id)} disabled={approvingExpense === exp.id}
+                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 bg-ac-green text-white hover:opacity-90 disabled:opacity-50 uppercase tracking-wider">
                                 <CheckCircle size={10} /> {approvingExpense === exp.id ? '…' : 'Approve'}
                               </button>
                             )}
-                            <button
-                              onClick={() => openExpenseReceiptPicker(exp.id)}
-                              disabled={addingReceiptExpense === exp.id}
-                              title="Add receipt"
-                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50"
-                            >
-                              <Upload size={10} /> {addingReceiptExpense === exp.id ? 'Uploading…' : 'Receipt'}
+                            {updateExpense && (
+                              <button onClick={() => { /* open edit modal */ }} title="Edit"
+                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
+                                <Pencil size={10} /> Edit
+                              </button>
+                            )}
+                            <button onClick={() => { setPrintingExpense(exp); setTimeout(() => { window.print(); setPrintingExpense(null) }, 80) }}
+                              title="Reimbursement PDF"
+                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
+                              <Printer size={10} /> PDF
+                            </button>
+                            <button onClick={() => openExpenseReceiptPicker(exp.id)} disabled={addingReceiptExpense === exp.id}
+                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50">
+                              <Upload size={10} /> {addingReceiptExpense === exp.id ? '…' : 'Receipt'}
                             </button>
                           </div>
                         </div>
@@ -1001,16 +1186,23 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         {/* Column headers */}
                         <div className="flex items-center border-b border-rule bg-paper/50 px-2 py-2">
                           <div className="w-6 flex-shrink-0" />
-                          <div className="flex-1 min-w-0 px-2 tbl-lbl">Description</div>
-                          <div className="w-24 px-2 tbl-lbl hidden sm:block">Category</div>
-                          <div className="w-20 px-2 tbl-lbl text-right hidden md:block">Est.</div>
-                          <div className="w-20 px-2 tbl-lbl text-right">Actual</div>
-                          <div className="w-20 px-2 tbl-lbl hidden sm:block">Status</div>
+                          {([
+                            { key: 'description' as CostSortKey, label: 'Description', cls: 'flex-1 min-w-0 px-2' },
+                            { key: 'category' as CostSortKey, label: 'Category', cls: 'w-24 px-2 hidden sm:block' },
+                            { key: 'estimated' as CostSortKey, label: 'Est.', cls: 'w-20 px-2 text-right hidden md:block' },
+                            { key: 'actual' as CostSortKey, label: 'Actual', cls: 'w-20 px-2 text-right' },
+                            { key: 'status' as CostSortKey, label: 'Status', cls: 'w-20 px-2 hidden sm:block' },
+                          ]).map(col => (
+                            <button key={col.key} onClick={() => toggleCostSort(col.key)}
+                              className={cn('tbl-lbl cursor-pointer select-none hover:text-ink transition-colors flex items-center', col.cls, col.cls.includes('right') ? 'justify-end' : '')}>
+                              {col.label}<SortIndicator k={col.key} />
+                            </button>
+                          ))}
                           <div className="w-8 flex-shrink-0" />
                           <div className="w-8 flex-shrink-0" />
                         </div>
 
-                        {costs.map((cost, index) => (
+                        {displayCosts.map((cost, index) => (
                           <Draggable key={cost.id} draggableId={cost.id} index={index}>
                             {(provided, snapshot) => (
                               <div
@@ -1028,10 +1220,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   className="flex items-center px-2 py-2.5 cursor-pointer hover:bg-cream/50 transition-colors"
                                   onClick={() => setEditingCost(editingCost === cost.id ? null : cost.id)}
                                 >
-                                  {/* Drag handle */}
+                                  {/* Drag handle — hidden when sorted */}
                                   <div
-                                    {...provided.dragHandleProps}
-                                    className="w-6 flex-shrink-0 flex items-center justify-center text-muted hover:text-ink cursor-grab active:cursor-grabbing"
+                                    {...(costSortKey === null ? provided.dragHandleProps : {})}
+                                    className={cn('w-6 flex-shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing', costSortKey !== null ? 'opacity-0 pointer-events-none' : 'text-muted hover:text-ink')}
                                     onClick={e => e.stopPropagation()}
                                   >
                                     <GripVertical size={12} />
@@ -1614,8 +1806,30 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         <ImageOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
       )}
 
+      {/* Expense reimbursement print (off-screen) */}
+      {printingExpense && (
+        <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+          <ExpenseReimbursePDF expense={printingExpense} forPrint={true} />
+        </div>
+      )}
+
       {/* Invoice PDF preview */}
       <InvoicePreviewModal invoice={previewInvoice} onClose={() => setPreviewInvoice(null)} />
+
+      {/* Edit invoice modal (from Invoices tab) */}
+      {updateInvoice && (
+        <InvoiceModal
+          isOpen={!!editingInvoice}
+          onClose={() => setEditingInvoice(null)}
+          invoice={editingInvoice}
+          existingInvoices={invoices}
+          onSave={async (data) => {
+            if (editingInvoice) await updateInvoice(editingInvoice.id, data)
+            setEditingInvoice(null)
+            toast('Invoice updated')
+          }}
+        />
+      )}
 
       {/* Quick-add Invoice modal */}
       {createInvoice && (

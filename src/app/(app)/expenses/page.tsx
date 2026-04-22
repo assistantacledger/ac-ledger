@@ -12,6 +12,7 @@ import { toast } from '@/lib/toast'
 import {
   Plus, Search, CheckCircle, DollarSign, Pencil, Trash2,
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
+  Eye, X,
 } from 'lucide-react'
 import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails } from '@/types'
 import { ENTITIES } from '@/types'
@@ -39,6 +40,7 @@ export default function ExpensesPage() {
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [printing, setPrinting] = useState<Expense | null>(null)
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<'profile' | 'list'>('profile')
   const [sortKey, setSortKey] = useState<SortKey>('date')
@@ -164,6 +166,17 @@ export default function ExpensesPage() {
       {printing && (
         <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
           <ExpenseReimbursePDF expense={printing} forPrint={true} />
+        </div>
+      )}
+      {lightboxUrl && (
+        <div className="fixed inset-0 z-[60] flex flex-col bg-black/90" onClick={() => setLightboxUrl(null)}>
+          <div className="flex items-center justify-end px-6 py-3">
+            <button onClick={() => setLightboxUrl(null)} className="text-white/60 hover:text-white"><X size={18} /></button>
+          </div>
+          <div className="flex-1 flex items-center justify-center p-6" onClick={e => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={lightboxUrl} alt="Receipt" className="max-w-full max-h-full object-contain" />
+          </div>
         </div>
       )}
       <Header title="Expenses" />
@@ -358,7 +371,12 @@ export default function ExpensesPage() {
                 <tbody>
                   {sorted.map((exp, idx) => (
                     <tr key={exp.id} className={cn('border-b border-rule last:border-0 group transition-colors hover:bg-cream/70', idx % 2 === 1 && 'bg-paper/40')}>
-                      <td className="px-5 py-2.5 text-sm font-medium text-ink">{exp.employee}</td>
+                      <td className="px-5 py-2.5">
+                        <button onClick={() => { setViewMode('profile'); setExpandedProfiles(new Set([exp.employee])) }}
+                          className="text-sm font-medium text-ink hover:underline text-left">
+                          {exp.employee}
+                        </button>
+                      </td>
                       <td className="px-3 py-2.5 font-mono text-xs text-muted whitespace-nowrap">{fmtDate(exp.date)}</td>
                       <td className="px-3 py-2.5 hidden lg:table-cell">
                         <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
@@ -376,7 +394,16 @@ export default function ExpensesPage() {
                       </td>
                       <td className="px-5 py-2.5">
                         <div className="row-actions justify-end">
-                          <button onClick={() => handlePrint(exp)} title="Print reimbursement PDF"
+                          {(exp.receipt_urls ?? []).length > 0 && (
+                            <button onClick={() => {
+                              const url = exp.receipt_urls![0]
+                              if (url.includes('.pdf')) window.open(url, '_blank')
+                              else setLightboxUrl(url)
+                            }} title="View receipt" className="p-1 text-muted hover:text-ink transition-colors">
+                              <Eye size={13} />
+                            </button>
+                          )}
+                          <button onClick={() => handlePrint(exp)} title="Reimbursement PDF"
                             className="p-1 text-muted hover:text-ink transition-colors"><FileText size={13} /></button>
                           {exp.status === 'submitted' && (
                             <button onClick={() => handleSetStatus(exp.id, 'approved')} title="Approve"

@@ -1,11 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
-import { fetchInvoices, fetchExpenses, autoMarkOverdue } from '@/lib/supabase'
+import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
+import { fetchInvoices, fetchExpenses, autoMarkOverdue, sb } from '@/lib/supabase'
 import { fmt, fmtDate, daysOverdue } from '@/lib/format'
+import { toast } from '@/lib/toast'
 import type { Invoice, Expense } from '@/types'
-import { TrendingUp, TrendingDown, AlertCircle, Scale, Clock, ArrowRight } from 'lucide-react'
+import { TrendingUp, TrendingDown, AlertCircle, Scale, Clock, ArrowRight, Eye, CheckCircle } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/format'
 
@@ -50,10 +53,18 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter()
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [previewing, setPreviewing] = useState<Invoice | null>(null)
+
+  async function markPaidInline(id: string) {
+    await sb.from('invoices').update({ status: 'paid' }).eq('id', id)
+    setInvoices(prev => prev.map(i => i.id === id ? { ...i, status: 'paid' as const } : i))
+    toast('Marked paid')
+  }
 
   useEffect(() => {
     async function load() {
@@ -115,6 +126,7 @@ export default function DashboardPage() {
 
   return (
     <>
+      <InvoicePreviewModal invoice={previewing} onClose={() => setPreviewing(null)} />
       <Header title="Dashboard" />
 
       <main className="flex-1 overflow-y-auto px-6 py-6">
@@ -189,50 +201,39 @@ export default function DashboardPage() {
                     <th className="tbl-lbl text-left px-3 py-2.5">Due</th>
                     <th className="tbl-lbl text-right px-5 py-2.5">Amount</th>
                     <th className="tbl-lbl text-left px-3 py-2.5">Status</th>
+                    <th className="w-16 px-3 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
                   {recent.map((inv, i) => (
-                    <tr
-                      key={inv.id}
-                      className={cn(
-                        'border-b border-rule last:border-0 hover:bg-cream/60 transition-colors group',
-                        i % 2 === 0 ? '' : 'bg-paper/40'
-                      )}
-                    >
-                      <td className="px-5 py-2.5 font-mono text-xs text-ink whitespace-nowrap">
-                        {inv.ref || '—'}
-                      </td>
+                    <tr key={inv.id} className={cn('border-b border-rule last:border-0 hover:bg-cream/60 transition-colors group', i % 2 === 0 ? '' : 'bg-paper/40')}>
+                      <td className="px-5 py-2.5 font-mono text-xs text-ink whitespace-nowrap">{inv.ref || '—'}</td>
                       <td className="px-3 py-2.5 text-sm text-ink max-w-[160px] truncate">
-                        {inv.party}
+                        {inv.project_code
+                          ? <button onClick={() => router.push(`/projects?open=${inv.project_code}`)} className="hover:underline">{inv.party}</button>
+                          : inv.party}
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className={cn(
-                          'font-mono text-[10px] uppercase tracking-wider',
-                          inv.type === 'receivable' ? 'text-ac-green' : 'text-ac-amber'
-                        )}>
+                        <span className={cn('font-mono text-[10px] uppercase tracking-wider', inv.type === 'receivable' ? 'text-ac-green' : 'text-ac-amber')}>
                           {inv.type === 'receivable' ? 'IN' : 'OUT'}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">
                         {inv.due ? (
-                          <span className={cn(
-                            inv.status === 'overdue' ? 'text-red-600' : 'text-muted'
-                          )}>
-                            {fmtDate(inv.due)}
-                            {inv.status === 'overdue' && (
-                              <span className="ml-1 text-red-500">
-                                (+{daysOverdue(inv.due)}d)
-                              </span>
-                            )}
+                          <span className={cn(inv.status === 'overdue' ? 'text-red-600' : 'text-muted')}>
+                            {fmtDate(inv.due)}{inv.status === 'overdue' && <span className="ml-1 text-red-500">(+{daysOverdue(inv.due)}d)</span>}
                           </span>
                         ) : '—'}
                       </td>
-                      <td className="px-5 py-2.5 text-sm font-semibold text-right whitespace-nowrap">
-                        {fmt(inv.amount, inv.currency)}
-                      </td>
+                      <td className="px-5 py-2.5 text-sm font-semibold text-right whitespace-nowrap">{fmt(inv.amount, inv.currency)}</td>
+                      <td className="px-3 py-2.5"><StatusBadge status={inv.status} /></td>
                       <td className="px-3 py-2.5">
-                        <StatusBadge status={inv.status} />
+                        <div className="row-actions justify-end opacity-0 group-hover:opacity-100">
+                          <button onClick={() => setPreviewing(inv)} title="View PDF" className="p-1 text-muted hover:text-ink transition-colors"><Eye size={12} /></button>
+                          {inv.status !== 'paid' && (
+                            <button onClick={() => markPaidInline(inv.id)} title="Mark paid" className="p-1 text-muted hover:text-ac-green transition-colors"><CheckCircle size={12} /></button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -260,14 +261,22 @@ export default function DashboardPage() {
               ) : (
                 <div className="divide-y divide-rule">
                   {upcoming.map(inv => (
-                    <div key={inv.id} className="px-5 py-3 flex items-center justify-between gap-2">
+                    <div key={inv.id} className="px-5 py-3 flex items-center justify-between gap-2 group">
                       <div className="min-w-0">
                         <p className="text-sm text-ink truncate">{inv.party}</p>
                         <p className="font-mono text-xs text-muted">{fmtDate(inv.due)}</p>
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-semibold text-ink">{fmt(inv.amount, inv.currency)}</p>
-                        <StatusBadge status={inv.status} />
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="row-actions opacity-0 group-hover:opacity-100">
+                          <button onClick={() => setPreviewing(inv)} title="View PDF" className="p-1 text-muted hover:text-ink"><Eye size={12} /></button>
+                          {inv.status !== 'paid' && (
+                            <button onClick={() => markPaidInline(inv.id)} title="Mark paid" className="p-1 text-muted hover:text-ac-green"><CheckCircle size={12} /></button>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-ink">{fmt(inv.amount, inv.currency)}</p>
+                          <StatusBadge status={inv.status} />
+                        </div>
                       </div>
                     </div>
                   ))}
