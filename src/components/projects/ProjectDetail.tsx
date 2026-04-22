@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import {
-  ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X,
+  ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, Eye,
   ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
   Sparkles, AlertCircle,
 } from 'lucide-react'
@@ -11,6 +11,7 @@ import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
+import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import type {
   Project, Invoice, Expense, ExpenseInsert, InvoiceInsert,
@@ -133,6 +134,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // Quick-add modals
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false)
   const [expenseModalOpen, setExpenseModalOpen] = useState(false)
+
+  // Invoice PDF preview
+  const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null)
+
+  // Expense actions
+  const [addingReceiptExpense, setAddingReceiptExpense] = useState<string | null>(null)
+  const [approvingExpense, setApprovingExpense] = useState<string | null>(null)
 
   // PDF scan in Files tab
   const [scanFile, setScanFile] = useState<{ base64: string; mediaType: string; name: string } | null>(null)
@@ -372,6 +380,141 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     toast('CSV exported')
   }
 
+  // ── Add invoice as cost ──
+  function addCostFromInvoice(inv: Invoice) {
+    const costStatus: CostStatus = inv.status === 'paid' ? 'paid' : 'confirmed'
+    const entry: ProjectCost = {
+      id: crypto.randomUUID(),
+      description: [inv.party, inv.ref].filter(Boolean).join(' — '),
+      category: 'Other',
+      estimated: Number(inv.amount),
+      actual: Number(inv.amount),
+      status: costStatus,
+      notes: `From invoice ${inv.ref ?? inv.id.slice(0, 8)}`,
+    }
+    saveCosts([...costs, entry])
+    toast(`Added "${entry.description}" to costs`)
+  }
+
+  // ── Add receipt to expense ──
+  async function addReceiptToExpense(expId: string, file: File) {
+    if (!file.type.match(/^(image\/(jpeg|png|gif|webp)|application\/pdf)$/)) {
+      alert('Only JPG, PNG, GIF, WebP, and PDF files are supported.')
+      return
+    }
+    setAddingReceiptExpense(expId)
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `receipts/${Date.now()}-${safeName}`
+      const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: false })
+      if (error) throw error
+      const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
+      const exp = projExpenses.find(e => e.id === expId)
+      const existing = exp?.receipt_urls ?? []
+      await sb.from('expenses').update({ receipt_urls: [...existing, urlData.publicUrl] }).eq('id', expId)
+      toast('Receipt added')
+    } catch (e) {
+      alert(`Upload failed: ${String(e)}`)
+    } finally {
+      setAddingReceiptExpense(null)
+    }
+  }
+
+  function openExpenseReceiptPicker(expId: string) {
+    const inp = document.createElement('input')
+    inp.type = 'file'
+    inp.accept = 'image/jpeg,image/png,image/gif,image/webp,application/pdf'
+    inp.onchange = (e) => {
+      const f = (e.target as HTMLInputElement).files?.[0]
+      if (f) addReceiptToExpense(expId, f)
+    }
+    document.body.appendChild(inp)
+    inp.click()
+    setTimeout(() => document.body.removeChild(inp), 60000)
+  }
+
+  // ── Approve expense ──
+  async function approveExpense(expId: string) {
+    setApprovingExpense(expId)
+    try {
+      const { error } = await sb.from('expenses').update({ status: 'approved' }).eq('id', expId)
+      if (error) throw error
+      toast('Expense approved')
+    } catch (e) {
+      toast(`Failed: ${String(e)}`, 'error')
+    } finally {
+      setApprovingExpense(null)
+    }
+  }
+
+  // ── Print financial summary ──
+  function printSummary() {
+    const totalOutgoingsAll = totalOutgoings + totalExpenses + totalCosts
+    const el = document.createElement('div')
+    el.id = '__proj_summary__'
+    el.innerHTML = `
+      <style>
+        @media print {
+          body > *:not(#__proj_summary__) { display: none !important; }
+          #__proj_summary__ { display: block !important; }
+        }
+        #__proj_summary__ {
+          font-family: 'JetBrains Mono', monospace;
+          padding: 40px;
+          max-width: 794px;
+          margin: 0 auto;
+          color: #1a1a1a;
+        }
+        #__proj_summary__ h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px 0; font-family: 'Outfit', sans-serif; }
+        #__proj_summary__ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin: 0 0 24px 0; font-weight: 400; }
+        #__proj_summary__ .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        #__proj_summary__ .stat { border: 1px solid #e2e2e0; padding: 12px 14px; }
+        #__proj_summary__ .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: #9a9a9a; }
+        #__proj_summary__ .stat-val { font-size: 18px; font-weight: 700; margin-top: 4px; }
+        #__proj_summary__ .net-positive { color: #3a7a5a; }
+        #__proj_summary__ .net-negative { color: #c0392b; }
+        #__proj_summary__ table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        #__proj_summary__ th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #9a9a9a; border-bottom: 1px solid #1a1a1a; padding: 6px 8px; }
+        #__proj_summary__ td { padding: 6px 8px; border-bottom: 1px solid #e2e2e0; }
+        #__proj_summary__ .tr { text-align: right; }
+        #__proj_summary__ hr { border: none; border-top: 2px solid #1a1a1a; margin: 20px 0 16px; }
+        #__proj_summary__ .footer { font-size: 9px; color: #9a9a9a; margin-top: 32px; }
+      </style>
+      <h1>${project.name}</h1>
+      <h2>${project.code} · ${project.entity} · ${fmtDate(project.date)}</h2>
+      <div class="summary-grid">
+        <div class="stat"><div class="stat-label">Budget</div><div class="stat-val">${project.budget > 0 ? fmt(project.budget) : '—'}</div></div>
+        <div class="stat"><div class="stat-label">Total Billable</div><div class="stat-val">${fmt(totalBillable)}</div></div>
+        <div class="stat"><div class="stat-label">Collected</div><div class="stat-val">${fmt(totalCollected)}</div></div>
+        <div class="stat"><div class="stat-label">Payable Invoices</div><div class="stat-val">${fmt(totalOutgoings)}</div></div>
+        <div class="stat"><div class="stat-label">Expenses</div><div class="stat-val">${fmt(totalExpenses)}</div></div>
+        <div class="stat"><div class="stat-label">Direct Costs</div><div class="stat-val">${fmt(totalCosts)}</div></div>
+      </div>
+      <div class="stat" style="margin-bottom:24px">
+        <div class="stat-label">Net Position (Billable − All Outgoings)</div>
+        <div class="stat-val ${netPosition >= 0 ? 'net-positive' : 'net-negative'}">${fmt(netPosition)}</div>
+      </div>
+      <hr/>
+      <table>
+        <thead><tr><th>Description</th><th>Category</th><th>Status</th><th class="tr">Estimated</th><th class="tr">Actual</th></tr></thead>
+        <tbody>
+          ${costs.map(c => `<tr>
+            <td>${c.description}${c.employeeName ? ` (${c.employeeName})` : ''}</td>
+            <td>${c.category}</td>
+            <td>${c.status}</td>
+            <td class="tr">${fmt(c.estimated)}</td>
+            <td class="tr">${fmt(c.actual)}</td>
+          </tr>`).join('')}
+          ${costs.length === 0 ? '<tr><td colspan="5" style="color:#9a9a9a;text-align:center;padding:16px">No costs recorded</td></tr>' : ''}
+        </tbody>
+      </table>
+      <p class="footer">Generated ${new Date().toLocaleString('en-GB')} · AC Ledger</p>
+    `
+    document.body.appendChild(el)
+    window.print()
+    setTimeout(() => document.body.removeChild(el), 1000)
+  }
+
   // ── PDF scan in files tab ──
   function handlePdfDrop(file: File) {
     if (!file.type.includes('pdf') && !file.type.startsWith('image/')) return
@@ -579,6 +722,89 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 </div>
               )}
             </div>
+
+            {/* ── Reconciliation ── */}
+            {(costs.length > 0 || projInvoices.length > 0) && (() => {
+              const payableInvoices = projInvoices.filter(i => i.type === 'payable')
+              const matchedCostIds = new Set<string>()
+              const matchedInvIds = new Set<string>()
+
+              // Match costs to invoices: amount within 10% OR description similarity
+              const matched: Array<{ cost: ProjectCost; inv: Invoice }> = []
+              for (const cost of costs) {
+                if (cost.expenseId) continue
+                const costAmt = cost.actual || cost.estimated
+                for (const inv of payableInvoices) {
+                  if (matchedInvIds.has(inv.id)) continue
+                  const invAmt = Number(inv.amount)
+                  const amtMatch = costAmt > 0 && Math.abs(costAmt - invAmt) / Math.max(costAmt, invAmt) <= 0.10
+                  const descMatch = cost.description.toLowerCase().includes((inv.party ?? '').toLowerCase().slice(0, 5)) ||
+                    (inv.party ?? '').toLowerCase().includes(cost.description.toLowerCase().slice(0, 5))
+                  if (amtMatch || (descMatch && invAmt > 0)) {
+                    matched.push({ cost, inv })
+                    matchedCostIds.add(cost.id)
+                    matchedInvIds.add(inv.id)
+                    break
+                  }
+                }
+              }
+              const unmatchedCosts = costs.filter(c => !c.expenseId && !matchedCostIds.has(c.id))
+              const unlinkedInvoices = payableInvoices.filter(i => !matchedInvIds.has(i.id))
+
+              if (matched.length === 0 && unmatchedCosts.length === 0 && unlinkedInvoices.length === 0) return null
+              return (
+                <div className="bg-white border border-rule">
+                  <div className="px-4 py-3 border-b border-rule flex items-center justify-between">
+                    <p className="tbl-lbl">Cost Reconciliation</p>
+                    <span className="font-mono text-[10px] text-muted">{matched.length} matched · {unmatchedCosts.length} unmatched · {unlinkedInvoices.length} unlinked</span>
+                  </div>
+                  <div className="divide-y divide-rule">
+                    {matched.map(({ cost, inv }) => (
+                      <div key={cost.id} className="px-4 py-2.5 flex items-center gap-3 bg-green-50/40">
+                        <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs text-ink">{cost.description}</span>
+                          <span className="font-mono text-[10px] text-muted ml-2">→ {inv.party} {inv.ref ? `(${inv.ref})` : ''}</span>
+                        </div>
+                        <span className="font-mono text-xs text-ink">{fmt(cost.actual || cost.estimated)}</span>
+                        <span className="badge badge-paid text-[9px]">matched</span>
+                      </div>
+                    ))}
+                    {unmatchedCosts.map(cost => (
+                      <div key={cost.id} className="px-4 py-2.5 flex items-center gap-3">
+                        <div className="w-2 h-2 rounded-full bg-ac-amber flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs text-ink">{cost.description}</span>
+                          <span className="font-mono text-[10px] text-muted ml-2">no linked invoice</span>
+                        </div>
+                        <span className="font-mono text-xs text-muted">{fmt(cost.actual || cost.estimated)}</span>
+                        <span className="badge badge-pending text-[9px]">unmatched</span>
+                      </div>
+                    ))}
+                    {unlinkedInvoices.map(inv => (
+                      <div key={inv.id} className="px-4 py-2.5 flex items-center gap-3 bg-paper/40">
+                        <div className="w-2 h-2 rounded-full bg-muted flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs text-ink">{inv.party}</span>
+                          {inv.ref && <span className="font-mono text-[10px] text-muted ml-2">{inv.ref}</span>}
+                          <span className="font-mono text-[10px] text-muted ml-2">no matching cost</span>
+                        </div>
+                        <span className="font-mono text-xs text-muted">{fmt(inv.amount, inv.currency)}</span>
+                        <span className="badge badge-draft text-[9px]">unlinked</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Export summary */}
+            <div className="flex justify-end">
+              <button onClick={printSummary}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
+                <Download size={11} /> Export Summary PDF
+              </button>
+            </div>
           </div>
         )}
 
@@ -592,14 +818,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-rule bg-paper/50">
-                      {['Ref', 'Party', 'Type', 'Due', 'Amount', 'Status'].map(h => (
+                      {['Ref', 'Party', 'Type', 'Due', 'Amount', 'Status', ''].map(h => (
                         <th key={h} className="tbl-lbl text-left px-4 py-2.5">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {projInvoices.map((inv, i) => (
-                      <tr key={inv.id} className={cn('border-b border-rule last:border-0', i % 2 === 1 && 'bg-paper/40')}>
+                      <tr key={inv.id} className={cn('border-b border-rule last:border-0 group', i % 2 === 1 && 'bg-paper/40')}>
                         <td className="px-4 py-2.5 font-mono text-xs">{inv.ref || '—'}</td>
                         <td className="px-4 py-2.5 text-sm">{inv.party}</td>
                         <td className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wider text-muted">{inv.type}</td>
@@ -611,6 +837,24 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                             draft: 'badge-draft', submitted: 'badge-submitted', approved: 'badge-approved',
                             sent: 'badge-sent', 'part-paid': 'badge-part-paid',
                           }[inv.status] ?? 'badge-draft')}>{inv.status}</span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <div className="row-actions justify-end">
+                            <button
+                              onClick={() => setPreviewInvoice(inv)}
+                              title="Preview PDF"
+                              className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Eye size={13} />
+                            </button>
+                            <button
+                              onClick={() => addCostFromInvoice(inv)}
+                              title="Add to costs"
+                              className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink border border-transparent hover:border-rule transition-all opacity-0 group-hover:opacity-100 whitespace-nowrap"
+                            >
+                              → Costs
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -632,27 +876,90 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               <p className="font-mono text-xs text-muted text-center py-16 uppercase tracking-wider">No expenses for this project</p>
             ) : (
               <div className="tbl-card">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-rule bg-paper/50">
-                      {['Employee', 'Date', 'Total', 'Status'].map(h => (
-                        <th key={h} className="tbl-lbl text-left px-4 py-2.5">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projExpenses.map((exp, i) => (
-                      <tr key={exp.id} className={cn('border-b border-rule last:border-0', i % 2 === 1 && 'bg-paper/40')}>
-                        <td className="px-4 py-2.5 text-sm font-medium">{exp.employee}</td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-muted">{fmtDate(exp.date)}</td>
-                        <td className="px-4 py-2.5 font-mono text-sm font-semibold">{fmt(exp.total)}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={cn('badge', { submitted: 'badge-submitted', approved: 'badge-approved', paid: 'badge-paid' }[exp.status])}>{exp.status}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="divide-y divide-rule">
+                  {projExpenses.map((exp, i) => {
+                    const receipts = exp.receipt_urls ?? []
+                    return (
+                      <div key={exp.id} className={cn('px-4 py-3 group', i % 2 === 1 && 'bg-paper/30')}>
+                        <div className="flex items-start gap-3 flex-wrap">
+                          {/* Main info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-ink">{exp.employee}</span>
+                              <span className="font-mono text-[10px] text-muted">{fmtDate(exp.date)}</span>
+                              <span className={cn('badge', { submitted: 'badge-submitted', approved: 'badge-approved', paid: 'badge-paid' }[exp.status])}>{exp.status}</span>
+                            </div>
+                            {exp.notes && (
+                              <p className="text-xs text-muted mt-0.5 truncate">{exp.notes}</p>
+                            )}
+                            {/* Line items summary */}
+                            {exp.line_items && exp.line_items.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                {exp.line_items.map((li, j) => (
+                                  <span key={j} className="font-mono text-[10px] text-muted bg-cream px-1.5 py-0.5">
+                                    {li.description} · {fmt(li.amount)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Amount */}
+                          <span className="font-mono text-sm font-semibold text-ink whitespace-nowrap">{fmt(exp.total)}</span>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {exp.status === 'submitted' && (
+                              <button
+                                onClick={() => approveExpense(exp.id)}
+                                disabled={approvingExpense === exp.id}
+                                title="Approve expense"
+                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 bg-ac-green text-white hover:opacity-90 transition-opacity disabled:opacity-50 uppercase tracking-wider"
+                              >
+                                <CheckCircle size={10} /> {approvingExpense === exp.id ? '…' : 'Approve'}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => openExpenseReceiptPicker(exp.id)}
+                              disabled={addingReceiptExpense === exp.id}
+                              title="Add receipt"
+                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50"
+                            >
+                              <Upload size={10} /> {addingReceiptExpense === exp.id ? 'Uploading…' : 'Receipt'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Receipts row */}
+                        {receipts.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {receipts.map((url, j) => {
+                              const isPdf = url.includes('.pdf') || url.includes('pdf')
+                              return (
+                                <button
+                                  key={j}
+                                  onClick={() => isPdf ? window.open(url, '_blank') : setLightboxUrl({ url, name: `Receipt ${j + 1}` })}
+                                  className="border border-rule overflow-hidden hover:opacity-80 transition-opacity"
+                                  title={`Receipt ${j + 1}`}
+                                >
+                                  {isPdf ? (
+                                    <div className="w-10 h-10 flex flex-col items-center justify-center bg-cream gap-0.5">
+                                      <FileText size={12} className="text-muted" />
+                                      <span className="font-mono text-[8px] text-muted">PDF</span>
+                                    </div>
+                                  ) : (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={url} alt={`Receipt ${j + 1}`} className="w-10 h-10 object-cover" />
+                                  )}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
                 <div className="px-4 py-2.5 border-t border-rule bg-cream">
                   <span className="font-mono text-xs text-muted">Total: </span>
                   <span className="font-mono text-xs font-semibold text-ink">{fmt(totalExpenses)}</span>
@@ -1306,6 +1613,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       {lightboxUrl && (
         <ImageOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
       )}
+
+      {/* Invoice PDF preview */}
+      <InvoicePreviewModal invoice={previewInvoice} onClose={() => setPreviewInvoice(null)} />
 
       {/* Quick-add Invoice modal */}
       {createInvoice && (
