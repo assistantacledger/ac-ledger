@@ -8,11 +8,13 @@ import { ProjectDetail } from '@/components/projects/ProjectDetail'
 import { useProjects } from '@/hooks/useProjects'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useExpenses } from '@/hooks/useExpenses'
+import { useAuth } from '@/contexts/AuthContext'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { Plus, Pencil, Trash2, FolderOpen } from 'lucide-react'
 import type { Project, Entity, ProjectStatus } from '@/types'
 import { ENTITIES } from '@/types'
+import { toast } from '@/lib/toast'
 
 const STATUSES: ProjectStatus[] = ['active', 'completed', 'on-hold']
 
@@ -29,8 +31,9 @@ const blank = (): Omit<Project, 'createdAt'> => ({
 
 export default function ProjectsPage() {
   const router = useRouter()
+  const { config } = useAuth()
   const { projects, createProject, updateProject, renameProjectCode, deleteProject } = useProjects()
-  const { invoices } = useInvoices()
+  const { invoices, createInvoice } = useInvoices()
   const { expenses, createExpense } = useExpenses()
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
@@ -109,6 +112,7 @@ export default function ProjectsPage() {
     setError('')
     setCodeChangeWarn(false)
     setModalOpen(false)
+    toast(editing ? 'Project updated' : 'Project created')
   }
 
   function deleteProjectAndCleanup(code: string) {
@@ -117,6 +121,7 @@ export default function ProjectsPage() {
     localStorage.removeItem(`project_costs_${code}`)
     deleteProject(code)
     setSelectedProject(null)
+    toast('Project deleted', 'error')
   }
 
   function handleDelete(code: string) {
@@ -140,7 +145,29 @@ export default function ProjectsPage() {
     const inv = invoices.filter(i => i.project_code === code)
     const receivable = inv.filter(i => i.type === 'receivable').reduce((t, i) => t + Number(i.amount), 0)
     const paid = inv.filter(i => i.type === 'receivable' && i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
-    return { receivable, paid, count: inv.length }
+    const payable = inv.filter(i => i.type === 'payable').reduce((t, i) => t + Number(i.amount), 0)
+    const projExpenses = expenses.filter(e => e.project_code === code).reduce((t, e) => t + Number(e.total), 0)
+    // Costs from localStorage
+    let costTotal = 0
+    try {
+      const raw = localStorage.getItem(`project_costs_${code}`)
+      if (raw) {
+        const costs = JSON.parse(raw) as Array<{ actual: number; estimated: number; expenseId?: string }>
+        costTotal = costs.filter(c => !c.expenseId).reduce((t, c) => t + Number(c.actual || c.estimated), 0)
+      }
+    } catch { /* ignore */ }
+    const totalSpend = payable + projExpenses + costTotal
+    return { receivable, paid, count: inv.length, totalSpend }
+  }
+
+  // RAG colour based on spend vs budget
+  function ragDot(project: Project) {
+    const { totalSpend } = projectStats(project.code)
+    if (project.budget <= 0) return null
+    const pct = totalSpend / project.budget
+    const color = pct > 1 ? 'bg-red-500' : pct >= 0.75 ? 'bg-ac-amber' : 'bg-ac-green'
+    const label = pct > 1 ? 'Over budget' : pct >= 0.75 ? 'Approaching budget' : 'Within budget'
+    return <span className={cn('w-2 h-2 rounded-full flex-shrink-0 inline-block', color)} title={label} />
   }
 
   const footer = (
@@ -166,6 +193,8 @@ export default function ProjectsPage() {
           onEdit={() => openEdit(selectedProject)}
           onDelete={() => deleteProjectAndCleanup(selectedProject.code)}
           createExpense={createExpense}
+          createInvoice={createInvoice}
+          anthropicKey={config?.anthropicKey}
         />
         <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>
           <ProjectFormBody form={form} set={set} editing={editing} />
@@ -221,6 +250,7 @@ export default function ProjectsPage() {
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="font-mono text-[10px] uppercase tracking-widest text-muted">{project.code}</span>
                           <span className={cn('badge', STATUS_STYLES[project.status])}>{project.status}</span>
+                          {ragDot(project)}
                         </div>
                         <p className="text-sm font-semibold text-ink truncate">{project.name}</p>
                         <p className="font-mono text-[10px] text-muted mt-0.5 uppercase tracking-wider">

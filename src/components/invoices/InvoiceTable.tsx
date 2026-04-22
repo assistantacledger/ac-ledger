@@ -1,10 +1,13 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { CheckCircle, Pencil, Trash2, Plus, Search, Eye, CopyPlus, CheckSquare, Square } from 'lucide-react'
+import { CheckCircle, Pencil, Trash2, Plus, Search, Eye, CopyPlus, CheckSquare, Square, ChevronUp, ChevronDown, ChevronsUpDown, StickyNote } from 'lucide-react'
 import { cn, fmt, fmtDate, daysOverdue } from '@/lib/format'
 import type { Invoice, InvoiceType, InvoiceStatus, Entity } from '@/types'
 import { ENTITIES } from '@/types'
+
+type SortKey = 'ref' | 'party' | 'due' | 'amount' | 'status'
+type SortDir = 'asc' | 'desc'
 
 const ALL_STATUSES: InvoiceStatus[] = [
   'draft', 'pending', 'submitted', 'approved', 'sent', 'overdue', 'part-paid', 'paid',
@@ -43,6 +46,13 @@ export function InvoiceTable({
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkPaying, setBulkPaying] = useState(false)
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('asc') }
+  }
 
   const filtered = useMemo(() => {
     let rows = invoices.filter(i => i.type === type)
@@ -58,8 +68,21 @@ export function InvoiceTable({
         i.notes?.toLowerCase().includes(q)
       )
     }
+    if (sortKey) {
+      rows = [...rows].sort((a, b) => {
+        let av: string | number = '', bv: string | number = ''
+        if (sortKey === 'ref') { av = a.ref ?? ''; bv = b.ref ?? '' }
+        else if (sortKey === 'party') { av = a.party ?? ''; bv = b.party ?? '' }
+        else if (sortKey === 'due') { av = a.due ?? ''; bv = b.due ?? '' }
+        else if (sortKey === 'amount') { av = Number(a.amount); bv = Number(b.amount) }
+        else if (sortKey === 'status') { av = a.status; bv = b.status }
+        if (av < bv) return sortDir === 'asc' ? -1 : 1
+        if (av > bv) return sortDir === 'asc' ? 1 : -1
+        return 0
+      })
+    }
     return rows
-  }, [invoices, type, entityFilter, statusFilter, search])
+  }, [invoices, type, entityFilter, statusFilter, search, sortKey, sortDir])
 
   const totalAmount = filtered.reduce((t, i) => t + Number(i.amount), 0)
   const label = type === 'payable' ? 'To Pay' : 'Incoming'
@@ -212,13 +235,35 @@ export function InvoiceTable({
                     </button>
                   </th>
                 )}
-                <th className="tbl-lbl text-left px-5 py-2.5 w-28">Ref</th>
-                <th className="tbl-lbl text-left px-3 py-2.5">Party</th>
+                {(['ref', 'party'] as SortKey[]).map((k, i) => (
+                  <th key={k} className={cn('tbl-lbl text-left py-2.5 cursor-pointer select-none hover:text-ink transition-colors', i === 0 ? 'px-5 w-28' : 'px-3')}
+                    onClick={() => toggleSort(k)}>
+                    <span className="flex items-center gap-1">
+                      {k === 'ref' ? 'Ref' : 'Party'}
+                      {sortKey === k ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />) : <ChevronsUpDown size={10} className="opacity-30" />}
+                    </span>
+                  </th>
+                ))}
                 <th className="tbl-lbl text-left px-3 py-2.5 hidden lg:table-cell">Entity</th>
                 <th className="tbl-lbl text-left px-3 py-2.5 hidden md:table-cell">Project</th>
-                <th className="tbl-lbl text-left px-3 py-2.5">Due</th>
-                <th className="tbl-lbl text-right px-3 py-2.5">Amount</th>
-                <th className="tbl-lbl text-left px-3 py-2.5">Status</th>
+                <th className="tbl-lbl text-left px-3 py-2.5 cursor-pointer select-none hover:text-ink transition-colors" onClick={() => toggleSort('due')}>
+                  <span className="flex items-center gap-1">
+                    Due
+                    {sortKey === 'due' ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />) : <ChevronsUpDown size={10} className="opacity-30" />}
+                  </span>
+                </th>
+                <th className="tbl-lbl text-right px-3 py-2.5 cursor-pointer select-none hover:text-ink transition-colors" onClick={() => toggleSort('amount')}>
+                  <span className="flex items-center justify-end gap-1">
+                    Amount
+                    {sortKey === 'amount' ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />) : <ChevronsUpDown size={10} className="opacity-30" />}
+                  </span>
+                </th>
+                <th className="tbl-lbl text-left px-3 py-2.5 cursor-pointer select-none hover:text-ink transition-colors" onClick={() => toggleSort('status')}>
+                  <span className="flex items-center gap-1">
+                    Status
+                    {sortKey === 'status' ? (sortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />) : <ChevronsUpDown size={10} className="opacity-30" />}
+                  </span>
+                </th>
                 <th className="w-32 px-5 py-2.5" />
               </tr>
             </thead>
@@ -281,7 +326,17 @@ export function InvoiceTable({
                       {fmt(inv.amount, inv.currency)}
                     </td>
                     <td className="px-3 py-2.5">
-                      <StatusBadge status={inv.status} />
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={inv.status} />
+                        {inv.internal && (
+                          <div className="relative group/note">
+                            <StickyNote size={11} className="text-muted cursor-help" />
+                            <div className="absolute left-0 bottom-full mb-1.5 z-20 hidden group-hover/note:block w-56 bg-ink text-white text-[10px] font-mono p-2 shadow-lg whitespace-pre-wrap leading-relaxed">
+                              {inv.internal}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-2.5">
                       <div className="row-actions justify-end">

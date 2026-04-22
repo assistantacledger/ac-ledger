@@ -10,6 +10,8 @@ import { cn, fmt, getNextRef, todayISO } from '@/lib/format'
 import { Plus, Trash2, RefreshCw, Printer, Save, LayoutTemplate, Link, Copy, Check } from 'lucide-react'
 import type { Invoice, InvoiceInsert, InvoiceStatus, Entity, LineItem, CompanySettings } from '@/types'
 import { ENTITIES, ENTITY_STORAGE_KEYS } from '@/types'
+import { useProjectCodes } from '@/hooks/useProjectCodes'
+import { ProjectCodeSelect } from '@/components/ui/ProjectCodeSelect'
 
 const STATUSES: InvoiceStatus[] = ['draft', 'pending', 'submitted', 'approved', 'sent', 'overdue', 'part-paid', 'paid']
 const CURRENCIES = ['£', '$', '€']
@@ -50,6 +52,7 @@ function getCompanySettings(entity: Entity): CompanySettings | null {
 export default function GeneratePage() {
   const { invoices, createInvoice } = useInvoices()
   const { saveTemplate } = useTemplates()
+  const projectCodes = useProjectCodes(invoices)
   const [form, setForm] = useState<InvoiceInsert>(emptyInvoice)
   const [company, setCompany] = useState<CompanySettings | null>(null)
   const [saving, setSaving] = useState(false)
@@ -104,13 +107,6 @@ export default function GeneratePage() {
     return () => window.removeEventListener('resize', calcScale)
   }, [])
 
-  // Unique project codes from Supabase invoices, filtered by entity
-  const projectCodes = useMemo(() => {
-    const codes = invoices
-      .filter(i => i.entity === linkEntity && i.project_code)
-      .map(i => i.project_code as string)
-    return Array.from(new Set(codes)).sort()
-  }, [invoices, linkEntity])
 
   const submissionLink = useMemo(() => {
     if (typeof window === 'undefined') return ''
@@ -371,27 +367,14 @@ export default function GeneratePage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="field-label">Project Code</label>
-                  <input
-                    type="text"
-                    value={form.project_code ?? ''}
-                    onChange={e => set('project_code', e.target.value || null)}
-                    placeholder="AC-24-001"
-                    className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink"
-                  />
-                </div>
-                <div>
-                  <label className="field-label">Project Name</label>
-                  <input
-                    type="text"
-                    value={form.project_name ?? ''}
-                    onChange={e => set('project_name', e.target.value || null)}
-                    placeholder="Project name"
-                    className="w-full border border-rule bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink"
-                  />
-                </div>
+              <div>
+                <label className="field-label">Project</label>
+                <ProjectCodeSelect
+                  value={form.project_code}
+                  onChange={(code, name) => { set('project_code', code); set('project_name', name) }}
+                  options={projectCodes}
+                  placeholder="Select project…"
+                />
               </div>
             </div>
 
@@ -510,8 +493,8 @@ export default function GeneratePage() {
                     className="w-full border border-rule bg-white px-3 py-2 text-sm font-mono text-ink focus:outline-none focus:border-ink"
                   >
                     <option value="">No project</option>
-                    {projectCodes.map(code => (
-                      <option key={code} value={code}>{code}</option>
+                    {projectCodes.map(p => (
+                      <option key={p.code} value={p.code}>{p.code}</option>
                     ))}
                   </select>
                 </div>

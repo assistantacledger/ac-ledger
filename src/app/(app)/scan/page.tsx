@@ -10,6 +10,8 @@ import { cn, todayISO, getNextRef } from '@/lib/format'
 import { Upload, X, FileText, ArrowRight, Sparkles, CheckCircle } from 'lucide-react'
 import type { InvoiceInsert, Entity } from '@/types'
 import { ENTITIES } from '@/types'
+import { useProjectCodes } from '@/hooks/useProjectCodes'
+import { ProjectCodeSelect } from '@/components/ui/ProjectCodeSelect'
 
 interface ConfidenceField<T> {
   value: T
@@ -44,6 +46,7 @@ export default function ScanPage() {
   const router = useRouter()
   const { invoices, createInvoice } = useInvoices()
   const { config } = useAuth()
+  const projectCodes = useProjectCodes(invoices)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
@@ -394,9 +397,13 @@ export default function ScanPage() {
                   <label className="field-label">Project Code</label>
                   {extracted && confidenceDot(extracted.project_code.confidence)}
                 </div>
-                <input type="text" value={form.project_code ?? ''} onChange={e => set('project_code', e.target.value || null)}
-                  className={cn('w-full border px-3 py-2 text-sm font-mono text-ink focus:outline-none',
-                    extracted ? confidenceClass(extracted.project_code.confidence) : 'border-rule bg-white focus:border-ink')} />
+                <ProjectCodeSelect
+                  value={form.project_code ?? null}
+                  onChange={(code, name) => { set('project_code', code); set('project_name', name) }}
+                  options={projectCodes}
+                  placeholder="Select project…"
+                  className={extracted ? confidenceClass(extracted.project_code.confidence) : ''}
+                />
               </div>
 
               <div>

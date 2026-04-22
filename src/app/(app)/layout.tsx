@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { Sidebar } from '@/components/layout/Sidebar'
+import { ToastContainer } from '@/components/ui/ToastContainer'
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, config } = useAuth()
@@ -44,6 +45,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {children}
       </div>
+      <ToastContainer />
     </div>
   )
 }

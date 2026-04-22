@@ -4,12 +4,16 @@ import { useState, useEffect, useRef } from 'react'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import {
   ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X,
-  ExternalLink, GripVertical, User, CheckCircle, ImageIcon,
+  ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
+  Sparkles, AlertCircle,
 } from 'lucide-react'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
+import { toast } from '@/lib/toast'
+import { InvoiceModal } from '@/components/invoices/InvoiceModal'
+import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import type {
-  Project, Invoice, Expense, ExpenseInsert,
+  Project, Invoice, Expense, ExpenseInsert, InvoiceInsert,
   ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus,
 } from '@/types'
 
@@ -96,9 +100,11 @@ interface Props {
   onEdit: () => void
   onDelete: () => void
   createExpense: (data: ExpenseInsert) => Promise<Expense>
+  createInvoice?: (data: InvoiceInsert) => Promise<Invoice>
+  anthropicKey?: string
 }
 
-export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense }: Props) {
+export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, anthropicKey }: Props) {
   const [tab, setTab] = useState<Tab>('overview')
   const [deleteConfirmProject, setDeleteConfirmProject] = useState(false)
 
@@ -123,6 +129,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [addingCost, setAddingCost] = useState(false)
   const [uploadingReceipt, setUploadingReceipt] = useState<string | null>(null)
   const [creatingExpense, setCreatingExpense] = useState<string | null>(null)
+
+  // Quick-add modals
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false)
+  const [expenseModalOpen, setExpenseModalOpen] = useState(false)
+
+  // PDF scan in Files tab
+  const [scanFile, setScanFile] = useState<{ base64: string; mediaType: string; name: string } | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [scanExtracted, setScanExtracted] = useState<Partial<InvoiceInsert> | null>(null)
+  const [scanError, setScanError] = useState('')
+  const [savingScanned, setSavingScanned] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
 
   const code = project.code
 
@@ -332,6 +350,97 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     }
   }
 
+  // ── CSV export ──
+  function exportCostsCSV() {
+    const header = 'Description,Category,Estimated,Actual,Status,Due Date,Employee,Receipt URL,Notes'
+    const rows = costs.map(c => [
+      `"${c.description.replace(/"/g, '""')}"`,
+      c.category,
+      c.estimated,
+      c.actual,
+      c.status,
+      c.dueDate ?? '',
+      c.employeeName ?? '',
+      c.receiptUrl ?? '',
+      `"${(c.notes ?? '').replace(/"/g, '""')}"`,
+    ].join(','))
+    const csv = [header, ...rows].join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = `${code}-costs.csv`
+    a.click()
+    toast('CSV exported')
+  }
+
+  // ── PDF scan in files tab ──
+  function handlePdfDrop(file: File) {
+    if (!file.type.includes('pdf') && !file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = e => {
+      const dataUrl = e.target?.result as string
+      setScanFile({ base64: dataUrl.split(',')[1], mediaType: file.type, name: file.name })
+      setScanExtracted(null)
+      setScanError('')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  async function handleScanPdf() {
+    if (!scanFile || !anthropicKey) {
+      setScanError('Anthropic API key not set — add it in Settings')
+      return
+    }
+    setScanning(true)
+    setScanError('')
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: scanFile.base64, mediaType: scanFile.mediaType, apiKey: anthropicKey }),
+      })
+      const data = await res.json() as { extracted?: Record<string, { value: unknown }>; error?: string }
+      if (!res.ok || data.error) { setScanError(data.error ?? 'Scan failed'); return }
+      const ext = data.extracted!
+      setScanExtracted({
+        type: 'payable',
+        party: String(ext.party?.value ?? ''),
+        ref: String(ext.ref?.value ?? ''),
+        amount: Number(ext.amount?.value ?? 0),
+        currency: String(ext.currency?.value ?? '£'),
+        due: ext.due?.value ? String(ext.due.value) : null,
+        project_code: project.code,
+        project_name: project.name,
+        entity: project.entity,
+        status: 'pending',
+        notes: null,
+        internal: null,
+        line_items: null,
+        recurring: false,
+        pdf_url: null,
+        payment_schedule: null,
+      })
+    } catch (e) {
+      setScanError(String(e))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  async function saveScannedInvoice() {
+    if (!scanExtracted || !createInvoice) return
+    setSavingScanned(true)
+    try {
+      await createInvoice(scanExtracted as InvoiceInsert)
+      setScanFile(null)
+      setScanExtracted(null)
+      toast('Invoice created from PDF')
+    } catch (e) {
+      setScanError(String(e))
+    } finally {
+      setSavingScanned(false)
+    }
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   const TABS: { key: Tab; label: string }[] = [
@@ -359,6 +468,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
           {project.entity === 'Actually Creative' ? 'AC' : project.entity}
         </span>
         <div className="flex-1" />
+        {createInvoice && (
+          <button onClick={() => setInvoiceModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
+            <Plus size={11} /> Invoice
+          </button>
+        )}
+        <button onClick={() => setExpenseModalOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
+          <Plus size={11} /> Expense
+        </button>
+        <div className="w-px h-4 bg-rule" />
         <button
           onClick={handleDeleteProject}
           className={cn(
@@ -546,14 +666,22 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         {tab === 'costs' && (
           <div className="p-6 space-y-4">
             <div className="tbl-card">
-              <div className="px-4 py-3 bg-cream border-b border-rule flex items-center justify-between">
+              <div className="px-4 py-3 bg-cream border-b border-rule flex items-center justify-between gap-3">
                 <p className="tbl-lbl">Internal Costs</p>
-                <button
-                  onClick={() => setAddingCost(true)}
-                  className="flex items-center gap-1.5 font-mono text-xs text-muted hover:text-ink transition-colors"
-                >
-                  <Plus size={11} /> Add Cost
-                </button>
+                <div className="flex items-center gap-2 ml-auto">
+                  {costs.length > 0 && (
+                    <button onClick={exportCostsCSV}
+                      className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
+                      <Download size={11} /> CSV
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setAddingCost(true)}
+                    className="flex items-center gap-1.5 font-mono text-xs text-muted hover:text-ink transition-colors"
+                  >
+                    <Plus size={11} /> Add Cost
+                  </button>
+                </div>
               </div>
 
               {costs.length === 0 && !addingCost ? (
@@ -583,7 +711,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                 {...provided.draggableProps}
                                 className={cn(
                                   'border-b border-rule last:border-0 group',
-                                  snapshot.isDragging ? 'bg-cream shadow-lg' : index % 2 === 1 ? 'bg-paper/30' : 'bg-white',
+                                  snapshot.isDragging ? 'bg-cream shadow-lg'
+                                    : cost.dueDate && cost.status !== 'paid' && cost.dueDate < todayISO() ? 'bg-red-50/60'
+                                    : index % 2 === 1 ? 'bg-paper/30' : 'bg-white',
                                 )}
                               >
                                 {/* Main row */}
@@ -613,6 +743,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                     </div>
                                     {cost.isEmployeeCost && cost.employeeName && (
                                       <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
+                                    )}
+                                    {cost.dueDate && cost.status !== 'paid' && (
+                                      <p className={cn('font-mono text-[10px] mt-0.5 flex items-center gap-1',
+                                        cost.dueDate < todayISO() ? 'text-red-500' : 'text-muted')}>
+                                        {cost.dueDate < todayISO() && <AlertCircle size={9} />}
+                                        Due {fmtDate(cost.dueDate)}
+                                      </p>
                                     )}
                                     {cost.notes && (
                                       <p className="font-mono text-[10px] text-muted/70 mt-0.5 truncate">{cost.notes}</p>
@@ -722,11 +859,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                         </select>
                                       </div>
                                     </div>
-                                    <div>
-                                      <label className="field-label">Notes</label>
-                                      <input value={cost.notes}
-                                        onChange={e => updateCost(cost.id, { notes: e.target.value })}
-                                        className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="field-label">Notes</label>
+                                        <input value={cost.notes}
+                                          onChange={e => updateCost(cost.id, { notes: e.target.value })}
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none" />
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Due Date</label>
+                                        <input type="date" value={cost.dueDate ?? ''}
+                                          onChange={e => updateCost(cost.id, { dueDate: e.target.value || undefined })}
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
+                                      </div>
                                     </div>
 
                                     {/* Receipt */}
@@ -854,13 +999,21 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                 </select>
                               </div>
                             </div>
-                            <div>
-                              <label className="field-label">Notes</label>
-                              <input value={newCost.notes}
-                                onChange={e => setNewCost(c => ({ ...c, notes: e.target.value }))}
-                                placeholder="Optional notes"
-                                className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none"
-                                onKeyDown={e => { if (e.key === 'Enter') addCost() }} />
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="field-label">Notes</label>
+                                <input value={newCost.notes}
+                                  onChange={e => setNewCost(c => ({ ...c, notes: e.target.value }))}
+                                  placeholder="Optional notes"
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none"
+                                  onKeyDown={e => { if (e.key === 'Enter') addCost() }} />
+                              </div>
+                              <div>
+                                <label className="field-label">Due Date</label>
+                                <input type="date" value={newCost.dueDate ?? ''}
+                                  onChange={e => setNewCost(c => ({ ...c, dueDate: e.target.value || undefined }))}
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
+                              </div>
                             </div>
                             <div className="flex items-center gap-2">
                               <button onClick={addCost}
@@ -899,6 +1052,108 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         {/* ── Files & Notes ── */}
         {tab === 'files-notes' && (
           <div className="p-6 space-y-8">
+
+            {/* ── PDF Invoice Extractor ── */}
+            {createInvoice && (
+              <div className="border border-rule">
+                <div className="px-4 py-3 bg-cream border-b border-rule flex items-center gap-2">
+                  <Sparkles size={12} className="text-muted" />
+                  <p className="tbl-lbl">Extract Invoice from PDF</p>
+                  <span className="font-mono text-[10px] text-muted ml-1">Drop a supplier PDF to auto-extract details</span>
+                </div>
+                <div
+                  className={cn(
+                    'p-4 transition-colors',
+                    dragOver ? 'bg-blue-50 border-blue-300' : ''
+                  )}
+                  onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={e => {
+                    e.preventDefault()
+                    setDragOver(false)
+                    const f = e.dataTransfer.files[0]
+                    if (f) handlePdfDrop(f)
+                  }}
+                >
+                  {!scanFile ? (
+                    <div
+                      className="border-2 border-dashed border-rule flex flex-col items-center justify-center py-8 gap-2 cursor-pointer hover:border-muted transition-colors"
+                      onClick={() => {
+                        const inp = document.createElement('input')
+                        inp.type = 'file'; inp.accept = 'application/pdf,image/*'
+                        inp.onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handlePdfDrop(f) }
+                        inp.click()
+                      }}
+                    >
+                      <FileText size={20} className="text-muted" />
+                      <p className="font-mono text-xs text-muted uppercase tracking-wider">Drop PDF or click to select</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-xs text-ink flex items-center gap-2">
+                          <FileText size={12} /> {scanFile.name}
+                        </span>
+                        <button onClick={() => { setScanFile(null); setScanExtracted(null) }} className="text-muted hover:text-ink">
+                          <X size={13} />
+                        </button>
+                      </div>
+                      {!scanExtracted ? (
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={handleScanPdf}
+                            disabled={scanning || !anthropicKey}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50"
+                          >
+                            <Sparkles size={11} /> {scanning ? 'Scanning…' : 'Extract with AI'}
+                          </button>
+                          {!anthropicKey && <span className="font-mono text-[10px] text-muted">Add Anthropic API key in Settings first</span>}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="tbl-lbl">Extracted Fields — edit before saving</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            {([
+                              { label: 'Party', key: 'party' as keyof InvoiceInsert },
+                              { label: 'Ref', key: 'ref' as keyof InvoiceInsert },
+                              { label: 'Amount', key: 'amount' as keyof InvoiceInsert },
+                              { label: 'Currency', key: 'currency' as keyof InvoiceInsert },
+                              { label: 'Due Date', key: 'due' as keyof InvoiceInsert },
+                              { label: 'Status', key: 'status' as keyof InvoiceInsert },
+                            ]).map(({ label, key }) => (
+                              <div key={key}>
+                                <label className="field-label">{label}</label>
+                                <input
+                                  value={String(scanExtracted[key] ?? '')}
+                                  onChange={e => setScanExtracted(prev => prev ? { ...prev, [key]: e.target.value || null } : prev)}
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2 pt-1">
+                            <span className="font-mono text-[10px] text-muted">Project: {project.code} (locked)</span>
+                            <div className="flex-1" />
+                            <button onClick={() => { setScanFile(null); setScanExtracted(null) }}
+                              className="font-mono text-xs text-muted hover:text-ink transition-colors">Cancel</button>
+                            <button
+                              onClick={saveScannedInvoice}
+                              disabled={savingScanned}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:opacity-90 disabled:opacity-50"
+                            >
+                              <CheckCircle size={11} /> {savingScanned ? 'Saving…' : 'Save as Invoice'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {scanError && (
+                        <p className="font-mono text-xs text-red-600">{scanError}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* ── Files ── */}
             <div>
@@ -1051,6 +1306,39 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       {lightboxUrl && (
         <ImageOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
       )}
+
+      {/* Quick-add Invoice modal */}
+      {createInvoice && (
+        <InvoiceModal
+          isOpen={invoiceModalOpen}
+          onClose={() => setInvoiceModalOpen(false)}
+          existingInvoices={invoices}
+          defaultType="receivable"
+          defaultValues={{
+            project_code: project.code,
+            project_name: project.name,
+            entity: project.entity,
+          }}
+          onSave={async (data) => {
+            await createInvoice(data)
+            setInvoiceModalOpen(false)
+            toast('Invoice created')
+          }}
+        />
+      )}
+
+      {/* Quick-add Expense modal */}
+      <ExpenseModal
+        isOpen={expenseModalOpen}
+        onClose={() => setExpenseModalOpen(false)}
+        onSave={async (data) => {
+          await createExpense(data)
+          setExpenseModalOpen(false)
+          toast('Expense created')
+        }}
+        prefillEmployee={undefined}
+        prefillBank={undefined}
+      />
     </div>
   )
 }

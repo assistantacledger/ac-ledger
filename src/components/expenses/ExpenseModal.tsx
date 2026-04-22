@@ -51,10 +51,13 @@ interface ExpenseModalProps {
   isOpen: boolean
   onClose: () => void
   expense?: Expense | null
+  prefillEmployee?: string
+  prefillBank?: BankDetails
+  defaultValues?: Partial<ExpenseInsert>
   onSave: (data: ExpenseInsert) => Promise<void>
 }
 
-export function ExpenseModal({ isOpen, onClose, expense, onSave }: ExpenseModalProps) {
+export function ExpenseModal({ isOpen, onClose, expense, prefillEmployee, prefillBank, defaultValues, onSave }: ExpenseModalProps) {
   const [form, setForm] = useState<ExpenseInsert>(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,13 +69,22 @@ export function ExpenseModal({ isOpen, onClose, expense, onSave }: ExpenseModalP
 
   useEffect(() => {
     if (isOpen) {
-      setForm(expense ? fromExpense(expense) : emptyForm())
+      if (expense) {
+        setForm(fromExpense(expense))
+        setReceiptUrls(expense.receipt_urls ?? [])
+      } else {
+        const base = emptyForm()
+        if (prefillEmployee) base.employee = prefillEmployee
+        if (prefillBank) base.bank_details = prefillBank
+        if (defaultValues) Object.assign(base, defaultValues)
+        setForm(base)
+        setReceiptUrls([])
+      }
       setError(null)
       setSaving(false)
-      setBankAutoFilled(false)
-      setReceiptUrls(expense?.receipt_urls ?? [])
+      setBankAutoFilled(!!prefillBank)
     }
-  }, [isOpen, expense])
+  }, [isOpen, expense, prefillEmployee, prefillBank])
 
   function handleEmployeeBlur(name: string) {
     if (expense) return // don't auto-fill when editing existing

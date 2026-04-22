@@ -215,6 +215,7 @@ export interface ProjectCost {
   actual: number
   status: CostStatus
   notes: string
+  dueDate?: string   // ISO date string — highlights in red if overdue and not paid
   receiptUrl?: string
   receiptPath?: string
   receiptType?: 'image' | 'pdf'
