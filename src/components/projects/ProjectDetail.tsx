@@ -6,7 +6,7 @@ import {
   ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, Eye,
   ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
   Sparkles, AlertCircle, Link2, Link2Off, Printer,
-  ChevronUp, ChevronDown, ChevronsUpDown, Table2,
+  ChevronUp, ChevronDown, ChevronsUpDown, Table2, Zap,
 } from 'lucide-react'
 import { PaymentSheet } from './PaymentSheet'
 import { sb } from '@/lib/supabase'
@@ -178,6 +178,15 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   }
   const [invoiceForms, setInvoiceForms] = useState<Record<string, CostInvoiceForm>>({})
 
+  // Bulk extract
+  const [bulkConfirm, setBulkConfirm] = useState<'costs' | 'files' | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<{ mode: 'costs' | 'files'; total: number; current: number; failed: string[] } | null>(null)
+  const [costBulkDone, setCostBulkDone] = useState<Set<string>>(new Set())
+  const [costBulkFailed, setCostBulkFailed] = useState<Set<string>>(new Set())
+  const [fileBulkDone, setFileBulkDone] = useState<Set<string>>(new Set())
+  const [fileBulkFailed, setFileBulkFailed] = useState<Set<string>>(new Set())
+  const [processedFileIds, setProcessedFileIds] = useState<Set<string>>(new Set())
+
   function getCostForm(costId: string, cost: ProjectCost): CostInvoiceForm {
     return invoiceForms[costId] ?? {
       ...BLANK_FORM, open: false,
@@ -309,6 +318,178 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     }
   }
 
+  // ── Shared extraction helper ──
+  async function extractFromUrl(url: string, mediaType: string): Promise<Record<string, ExtractedField> | null> {
+    if (!anthropicKey) return null
+    const response = await fetch(url)
+    const blob = await response.blob()
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = e => resolve((e.target?.result as string).split(',')[1])
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+    const res = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64, mediaType: mediaType || blob.type || 'application/pdf', apiKey: anthropicKey }),
+    })
+    const data = await res.json() as { extracted?: Record<string, ExtractedField>; error?: string }
+    if (!res.ok || data.error) throw new Error(data.error ?? 'Extraction failed')
+    return data.extracted!
+  }
+
+  function pickField(ext: Record<string, ExtractedField>, key: string, fallback: string): string {
+    const f = ext[key]
+    if (f && f.value !== null && String(f.value).trim()) return String(f.value)
+    return fallback
+  }
+
+  async function saveExtractedInvoice(ext: Record<string, ExtractedField>, opts: {
+    defaultParty: string; pdfUrl: string | null; notes: string;
+  }): Promise<Invoice> {
+    if (!createInvoice) throw new Error('createInvoice not available')
+    const pick = (k: string, fb: string) => pickField(ext, k, fb)
+    const party = pick('party', opts.defaultParty)
+    const ref = pick('ref', '')
+    const amount = ext.amount?.value ? Number(ext.amount.value) : 0
+    const currency = pick('currency', '£')
+    const due = pick('due', '')
+    const bankName = pick('bankName', '')
+    const sortCode = pick('sortCode', '')
+    const accNum = pick('accNum', '')
+    const accName = pick('accName', '')
+    const iban = pick('iban', '')
+    const swift = pick('swift', '')
+    const hasBankDetails = bankName || sortCode || accNum || accName || iban || swift
+    const bankSummary = hasBankDetails
+      ? `\nBank: ${bankName} | Sort: ${sortCode} | Acc: ${accNum} | Name: ${accName}${iban ? ` | IBAN: ${iban}` : ''}${swift ? ` | SWIFT: ${swift}` : ''}`
+      : ''
+    const bankDetails = hasBankDetails ? { accName, bankName: bankName || undefined, sortCode, accNum, iban: iban || undefined, swift: swift || undefined } : null
+    const invoiceData: InvoiceInsert = {
+      type: 'payable', party, ref, amount, currency,
+      due: due || null, status: 'pending',
+      entity: project.entity, project_code: project.code, project_name: project.name,
+      notes: opts.notes + bankSummary,
+      internal: null, line_items: null, recurring: false,
+      pdf_url: opts.pdfUrl, payment_schedule: null, bank_details: bankDetails,
+    }
+    try {
+      return await createInvoice(invoiceData)
+    } catch (e) {
+      const msg = String(e).toLowerCase()
+      if (msg.includes('bank_details') || msg.includes('column')) {
+        const { bank_details: _bd, ...dataWithout } = invoiceData
+        const created = await createInvoice(dataWithout as InvoiceInsert)
+        if (bankDetails) {
+          try { localStorage.setItem(`invoice_bank_${created.id}`, JSON.stringify(bankDetails)) } catch { /* ignore */ }
+        }
+        return created
+      }
+      throw e
+    }
+  }
+
+  // ── Bulk extract costs ──
+  async function bulkExtractCosts(costIds: string[]) {
+    if (!anthropicKey || !createInvoice) return
+    setBulkConfirm(null)
+    setBulkProgress({ mode: 'costs', total: costIds.length, current: 0, failed: [] })
+    const failed: string[] = []
+
+    for (let i = 0; i < costIds.length; i++) {
+      const costId = costIds[i]
+      setBulkProgress({ mode: 'costs', total: costIds.length, current: i + 1, failed: [...failed] })
+      const cost = costs.find(c => c.id === costId)
+      if (!cost?.receiptUrl) {
+        failed.push(costId)
+        setCostBulkFailed(prev => { const n = new Set(Array.from(prev)); n.add(costId); return n })
+        continue
+      }
+      try {
+        const ext = await extractFromUrl(cost.receiptUrl, cost.receiptType === 'image' ? 'image/jpeg' : 'application/pdf')
+        if (!ext) throw new Error('No data')
+        const created = await saveExtractedInvoice(ext, {
+          defaultParty: cost.description,
+          pdfUrl: cost.receiptUrl,
+          notes: `Cost: ${cost.description}`,
+        })
+        addManualLink(costId, created.id)
+        setCostBulkDone(prev => { const n = new Set(Array.from(prev)); n.add(costId); return n })
+      } catch {
+        failed.push(costId)
+        setCostBulkFailed(prev => { const n = new Set(Array.from(prev)); n.add(costId); return n })
+      }
+      if (i < costIds.length - 1) await new Promise(r => setTimeout(r, 400))
+    }
+
+    setBulkProgress(null)
+    const ok = costIds.length - failed.length
+    toast(
+      failed.length === 0
+        ? `Extracted ${ok} invoice${ok !== 1 ? 's' : ''} successfully`
+        : `Extracted ${ok} successfully · ${failed.length} failed — see highlighted rows`,
+      failed.length > 0 ? 'error' : undefined,
+    )
+  }
+
+  async function retryBulkCost(costId: string) {
+    setCostBulkFailed(prev => { const n = new Set(prev); n.delete(costId); return n })
+    await bulkExtractCosts([costId])
+  }
+
+  // ── Bulk extract files ──
+  async function bulkExtractFiles(fileIds: string[]) {
+    if (!anthropicKey || !createInvoice) return
+    setBulkConfirm(null)
+    setBulkProgress({ mode: 'files', total: fileIds.length, current: 0, failed: [] })
+    const failed: string[] = []
+    const newProcessed = new Set(Array.from(processedFileIds))
+
+    for (let i = 0; i < fileIds.length; i++) {
+      const fileId = fileIds[i]
+      setBulkProgress({ mode: 'files', total: fileIds.length, current: i + 1, failed: [...failed] })
+      const file = files.find(f => f.id === fileId)
+      if (!file) {
+        failed.push(fileId)
+        setFileBulkFailed(prev => { const n = new Set(Array.from(prev)); n.add(fileId); return n })
+        continue
+      }
+      try {
+        const mediaType = file.type === 'image' ? 'image/jpeg' : 'application/pdf'
+        const ext = await extractFromUrl(file.url, mediaType)
+        if (!ext) throw new Error('No data')
+        await saveExtractedInvoice(ext, {
+          defaultParty: file.name,
+          pdfUrl: file.url,
+          notes: `From file: ${file.name}`,
+        })
+        newProcessed.add(fileId)
+        setFileBulkDone(prev => { const n = new Set(Array.from(prev)); n.add(fileId); return n })
+      } catch {
+        failed.push(fileId)
+        setFileBulkFailed(prev => { const n = new Set(Array.from(prev)); n.add(fileId); return n })
+      }
+      if (i < fileIds.length - 1) await new Promise(r => setTimeout(r, 400))
+    }
+
+    setProcessedFileIds(newProcessed)
+    lsSet(`project_file_scanned_${code}`, Array.from(newProcessed))
+    setBulkProgress(null)
+    const ok = fileIds.length - failed.length
+    toast(
+      failed.length === 0
+        ? `Extracted ${ok} invoice${ok !== 1 ? 's' : ''} from files`
+        : `Extracted ${ok} from files · ${failed.length} failed`,
+      failed.length > 0 ? 'error' : undefined,
+    )
+  }
+
+  async function retryBulkFile(fileId: string) {
+    setFileBulkFailed(prev => { const n = new Set(prev); n.delete(fileId); return n })
+    await bulkExtractFiles([fileId])
+  }
+
   // PDF scan in Files tab
   const [scanFile, setScanFile] = useState<{ base64: string; mediaType: string; name: string } | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -325,6 +506,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     setFiles(lsGet<ProjectFile[]>(`project_files_${code}`, []))
     setCosts(lsGet<ProjectCost[]>(`project_costs_${code}`, []))
     setReconLinks(lsGet<ReconLinks>(`project_cost_links_${code}`, EMPTY_LINKS))
+    setProcessedFileIds(new Set(Array.from(lsGet<string[]>(`project_file_scanned_${code}`, []))))
+    setBulkProgress(null)
+    setBulkConfirm(null)
+    setCostBulkDone(new Set())
+    setCostBulkFailed(new Set())
+    setFileBulkDone(new Set())
+    setFileBulkFailed(new Set())
     const savedSort = lsGet<{ key: CostSortKey | null; dir: 'asc' | 'desc' } | null>(`project_costs_sort_${code}`, null)
     if (savedSort) { setCostSortKey(savedSort.key); setCostSortDir(savedSort.dir) }
     else { setCostSortKey(null); setCostSortDir('asc') }
@@ -815,6 +1003,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // ─── Render ───────────────────────────────────────────────────────────────
 
   const payableCount = projInvoices.filter(i => i.type === 'payable').length
+  const eligibleCosts = costs.filter(c => c.receiptUrl && !reconLinks.manual.find(m => m.costId === c.id))
+  const eligibleFiles = files.filter(f => (f.type === 'pdf' || f.type === 'image') && !processedFileIds.has(f.id))
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview',       label: 'Overview' },
     { key: 'invoices',       label: `Invoices (${projInvoices.length})` },
@@ -1327,9 +1517,22 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         {tab === 'costs' && (
           <div className="p-6 space-y-4">
             <div className="tbl-card">
-              <div className="px-4 py-3 bg-cream border-b border-rule flex items-center justify-between gap-3">
+              <div className="px-4 py-3 bg-cream border-b border-rule flex items-center justify-between gap-3 flex-wrap">
                 <p className="tbl-lbl">Internal Costs</p>
-                <div className="flex items-center gap-2 ml-auto">
+                <div className="flex items-center gap-2 ml-auto flex-wrap">
+                  {/* Bulk extract button */}
+                  {anthropicKey && eligibleCosts.length > 0 && createInvoice && !bulkProgress && (
+                    <button
+                      onClick={() => setBulkConfirm(bulkConfirm === 'costs' ? null : 'costs')}
+                      className="flex items-center gap-1 font-mono text-xs px-2 py-0.5 border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                    >
+                      <Zap size={10} className="text-amber-500" />
+                      Extract All PDFs ({eligibleCosts.length})
+                    </button>
+                  )}
+                  {!anthropicKey && eligibleCosts.length > 0 && (
+                    <span className="font-mono text-[10px] text-muted italic">Add Anthropic key in Settings to bulk-extract</span>
+                  )}
                   {costs.length > 0 && (
                     <button onClick={exportCostsCSV}
                       className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
@@ -1344,6 +1547,35 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   </button>
                 </div>
               </div>
+
+              {/* Confirm / progress bar for costs bulk extract */}
+              {bulkConfirm === 'costs' && (
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-3 flex-wrap">
+                  <AlertCircle size={12} className="text-amber-600 flex-shrink-0" />
+                  <span className="font-mono text-xs text-amber-800 flex-1">
+                    Extract invoice details from {eligibleCosts.length} attached PDF{eligibleCosts.length !== 1 ? 's' : ''} using AI and save as payable invoices. Continue?
+                  </span>
+                  <button
+                    onClick={() => bulkExtractCosts(eligibleCosts.map(c => c.id))}
+                    className="font-mono text-xs px-2.5 py-1 bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                  >
+                    Yes, extract all
+                  </button>
+                  <button onClick={() => setBulkConfirm(null)} className="font-mono text-xs text-muted hover:text-ink transition-colors">Cancel</button>
+                </div>
+              )}
+              {bulkProgress && bulkProgress.mode === 'costs' && (
+                <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-200 flex items-center gap-3">
+                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <span className="font-mono text-xs text-blue-800">
+                    Extracting {bulkProgress.current} of {bulkProgress.total}…
+                    {bulkProgress.failed.length > 0 && ` (${bulkProgress.failed.length} failed so far)`}
+                  </span>
+                  <div className="flex-1 h-1 bg-blue-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+                  </div>
+                </div>
+              )}
 
               {costs.length === 0 && !addingCost ? (
                 <p className="font-mono text-xs text-muted text-center py-12 uppercase tracking-wider">No costs yet</p>
@@ -1427,6 +1659,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                           </button>
                                         )
                                       })()}
+                                      {costBulkDone.has(cost.id) && (
+                                        <span className="inline-flex items-center gap-0.5 font-mono text-[9px] text-ac-green font-semibold">
+                                          <CheckCircle size={9} /> Extracted
+                                        </span>
+                                      )}
+                                      {costBulkFailed.has(cost.id) && (
+                                        <button
+                                          onClick={e => { e.stopPropagation(); void retryBulkCost(cost.id) }}
+                                          className="inline-flex items-center gap-0.5 font-mono text-[9px] text-amber-600 hover:text-amber-800 transition-colors"
+                                        >
+                                          <AlertCircle size={9} /> Failed — Retry
+                                        </button>
+                                      )}
                                     </div>
                                     {cost.isEmployeeCost && cost.employeeName && (
                                       <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
@@ -2015,9 +2260,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
             {/* ── Files ── */}
             <div>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <p className="tbl-lbl">Files</p>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {anthropicKey && eligibleFiles.length > 0 && createInvoice && !bulkProgress && (
+                    <button
+                      onClick={() => setBulkConfirm(bulkConfirm === 'files' ? null : 'files')}
+                      className="flex items-center gap-1 font-mono text-xs px-2 py-0.5 border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                    >
+                      <Zap size={10} className="text-amber-500" />
+                      Extract All PDFs ({eligibleFiles.length})
+                    </button>
+                  )}
                   {uploading && <span className="font-mono text-xs text-muted">Uploading…</span>}
                   <button
                     onClick={() => fileInputRef.current?.click()}
@@ -2028,6 +2282,35 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   </button>
                 </div>
               </div>
+
+              {/* Confirm / progress for files bulk extract */}
+              {bulkConfirm === 'files' && (
+                <div className="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 flex items-center gap-3 flex-wrap">
+                  <AlertCircle size={12} className="text-amber-600 flex-shrink-0" />
+                  <span className="font-mono text-xs text-amber-800 flex-1">
+                    Extract invoice details from {eligibleFiles.length} file{eligibleFiles.length !== 1 ? 's' : ''} using AI. Continue?
+                  </span>
+                  <button
+                    onClick={() => bulkExtractFiles(eligibleFiles.map(f => f.id))}
+                    className="font-mono text-xs px-2.5 py-1 bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                  >
+                    Yes, extract all
+                  </button>
+                  <button onClick={() => setBulkConfirm(null)} className="font-mono text-xs text-muted hover:text-ink transition-colors">Cancel</button>
+                </div>
+              )}
+              {bulkProgress && bulkProgress.mode === 'files' && (
+                <div className="mb-3 px-4 py-2.5 bg-blue-50 border border-blue-200 flex items-center gap-3">
+                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <span className="font-mono text-xs text-blue-800">
+                    Extracting {bulkProgress.current} of {bulkProgress.total}…
+                  </span>
+                  <div className="flex-1 h-1 bg-blue-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+                  </div>
+                </div>
+              )}
+
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2048,9 +2331,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
                   {files.map(f => (
-                    <div key={f.id} className="group relative border border-rule bg-white overflow-hidden">
+                    <div key={f.id} className={cn('group relative border bg-white overflow-hidden', fileBulkFailed.has(f.id) ? 'border-amber-300' : 'border-rule')}>
                       <button
-                        className="w-full aspect-square flex items-center justify-center bg-cream hover:bg-cream/80 transition-colors"
+                        className="w-full aspect-square flex items-center justify-center bg-cream hover:bg-cream/80 transition-colors relative"
                         onClick={() => f.type === 'image' ? setLightboxUrl({ url: f.url, name: f.name }) : window.open(f.url, '_blank')}
                         title={f.name}
                       >
@@ -2061,6 +2344,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           <div className="flex flex-col items-center gap-1">
                             <FileText size={24} className="text-muted" />
                             <span className="font-mono text-[9px] text-muted uppercase">PDF</span>
+                          </div>
+                        )}
+                        {/* Extracted overlay */}
+                        {fileBulkDone.has(f.id) && (
+                          <div className="absolute inset-0 bg-ac-green/10 flex items-center justify-center">
+                            <CheckCircle size={20} className="text-ac-green" />
                           </div>
                         )}
                       </button>
@@ -2078,7 +2367,20 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       </button>
                       <div className="px-2 py-1.5 border-t border-rule">
                         <p className="font-mono text-[9px] text-muted truncate">{f.name}</p>
-                        <p className="font-mono text-[9px] text-muted/60">{fmtDate(f.uploadedAt)}</p>
+                        {fileBulkDone.has(f.id) && (
+                          <p className="font-mono text-[9px] text-ac-green">✓ Extracted</p>
+                        )}
+                        {fileBulkFailed.has(f.id) && (
+                          <button
+                            onClick={() => void retryBulkFile(f.id)}
+                            className="font-mono text-[9px] text-amber-600 hover:text-amber-800 transition-colors w-full text-left"
+                          >
+                            ⚠ Failed — Retry
+                          </button>
+                        )}
+                        {!fileBulkDone.has(f.id) && !fileBulkFailed.has(f.id) && (
+                          <p className="font-mono text-[9px] text-muted/60">{fmtDate(f.uploadedAt)}</p>
+                        )}
                       </div>
                     </div>
                   ))}
