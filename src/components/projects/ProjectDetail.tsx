@@ -161,6 +161,98 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [addingReceiptExpense, setAddingReceiptExpense] = useState<string | null>(null)
   const [approvingExpense, setApprovingExpense] = useState<string | null>(null)
 
+  // Cost → invoice forms (keyed by cost.id)
+  type CostInvoiceForm = { open: boolean; party: string; ref: string; due: string; currency: string; amount: number; creating: boolean; extracting: boolean }
+  const [invoiceForms, setInvoiceForms] = useState<Record<string, CostInvoiceForm>>({})
+
+  function getCostForm(costId: string, cost: ProjectCost): CostInvoiceForm {
+    return invoiceForms[costId] ?? {
+      open: false, party: cost.description, ref: '', due: '', currency: '£',
+      amount: cost.actual || cost.estimated, creating: false, extracting: false,
+    }
+  }
+
+  function setCostForm(costId: string, patch: Partial<CostInvoiceForm>) {
+    setInvoiceForms(prev => ({ ...prev, [costId]: { ...getCostFormRaw(costId), ...patch } }))
+  }
+
+  function getCostFormRaw(costId: string): CostInvoiceForm {
+    return invoiceForms[costId] ?? { open: false, party: '', ref: '', due: '', currency: '£', amount: 0, creating: false, extracting: false }
+  }
+
+  async function createInvoiceFromCost(costId: string) {
+    if (!createInvoice) return
+    const cost = costs.find(c => c.id === costId)
+    if (!cost) return
+    const form = getCostForm(costId, cost)
+    setCostForm(costId, { creating: true })
+    try {
+      const data: InvoiceInsert = {
+        type: 'payable',
+        party: form.party || cost.description,
+        ref: form.ref || '',
+        amount: form.amount,
+        currency: form.currency,
+        due: form.due || null,
+        status: 'pending',
+        entity: project.entity,
+        project_code: project.code,
+        project_name: project.name,
+        notes: `Cost: ${cost.description}`,
+        internal: null,
+        line_items: null,
+        recurring: false,
+        pdf_url: null,
+        payment_schedule: null,
+      }
+      const created = await createInvoice(data)
+      addManualLink(costId, created.id)
+      setCostForm(costId, { open: false, creating: false })
+      toast('Payable invoice created and linked')
+    } catch (e) {
+      toast(`Failed: ${String(e)}`, 'error')
+      setCostForm(costId, { creating: false })
+    }
+  }
+
+  async function extractCostPdf(costId: string) {
+    if (!anthropicKey) { toast('Anthropic API key not set — add it in Settings', 'error'); return }
+    const cost = costs.find(c => c.id === costId)
+    if (!cost?.receiptUrl) return
+    setCostForm(costId, { extracting: true })
+    try {
+      // Fetch the PDF from storage and convert to base64
+      const response = await fetch(cost.receiptUrl)
+      const blob = await response.blob()
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = e => resolve((e.target?.result as string).split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(blob)
+      })
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64, mediaType: blob.type || 'application/pdf', apiKey: anthropicKey }),
+      })
+      const data = await res.json() as { extracted?: Record<string, { value: unknown }>; error?: string }
+      if (!res.ok || data.error) { toast(data.error ?? 'Extraction failed', 'error'); return }
+      const ext = data.extracted!
+      setCostForm(costId, {
+        extracting: false,
+        party: String(ext.party?.value ?? getCostFormRaw(costId).party),
+        ref: String(ext.ref?.value ?? getCostFormRaw(costId).ref),
+        amount: Number(ext.amount?.value ?? getCostFormRaw(costId).amount),
+        currency: String(ext.currency?.value ?? '£'),
+        due: ext.due?.value ? String(ext.due.value) : getCostFormRaw(costId).due,
+      })
+      toast('Details extracted from PDF')
+    } catch (e) {
+      toast(`Extraction failed: ${String(e)}`, 'error')
+      setCostForm(costId, { extracting: false })
+    }
+  }
+
   // PDF scan in Files tab
   const [scanFile, setScanFile] = useState<{ base64: string; mediaType: string; name: string } | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -1239,6 +1331,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       {cost.isEmployeeCost && !cost.expenseId && (
                                         <span className="badge badge-draft" style={{ fontSize: 9 }}>Employee</span>
                                       )}
+                                      {(() => {
+                                        const link = reconLinks.manual.find(m => m.costId === cost.id)
+                                        const linkedInv = link ? projInvoices.find(i => i.id === link.invoiceId) : null
+                                        if (!linkedInv) return null
+                                        return (
+                                          <button
+                                            onClick={e => { e.stopPropagation(); setPreviewInvoice(linkedInv) }}
+                                            className={cn('badge cursor-pointer hover:opacity-80 transition-opacity', {
+                                              paid: 'badge-paid', pending: 'badge-pending', overdue: 'badge-overdue',
+                                              draft: 'badge-draft', submitted: 'badge-submitted', approved: 'badge-approved',
+                                              sent: 'badge-sent', 'part-paid': 'badge-part-paid',
+                                            }[linkedInv.status] ?? 'badge-draft')}
+                                            style={{ fontSize: 9 }}
+                                            title="View linked invoice"
+                                          >
+                                            → {linkedInv.ref || linkedInv.id.slice(0, 8)} · {linkedInv.status}
+                                          </button>
+                                        )
+                                      })()}
                                     </div>
                                     {cost.isEmployeeCost && cost.employeeName && (
                                       <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
@@ -1448,6 +1559,111 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                         </>
                                       )}
                                     </div>
+
+                                    {/* This is an invoice */}
+                                    {createInvoice && (() => {
+                                      const form = getCostForm(cost.id, cost)
+                                      const existingLink = reconLinks.manual.find(m => m.costId === cost.id)
+                                      const linkedInv = existingLink ? projInvoices.find(i => i.id === existingLink.invoiceId) : null
+                                      return (
+                                        <div className="border-t border-rule pt-3 space-y-2">
+                                          <div className="flex items-center gap-3 flex-wrap">
+                                            <span className="field-label">This is an invoice</span>
+                                            {linkedInv ? (
+                                              <span className="font-mono text-xs text-ac-green flex items-center gap-1">
+                                                <CheckCircle size={10} /> Invoice linked: {linkedInv.ref || linkedInv.id.slice(0, 8)}
+                                              </span>
+                                            ) : (
+                                              <button
+                                                onClick={() => setCostForm(cost.id, { ...getCostFormRaw(cost.id), open: !form.open, party: form.open ? form.party : cost.description, amount: form.open ? form.amount : (cost.actual || cost.estimated) })}
+                                                className={cn(
+                                                  'flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider border transition-colors',
+                                                  form.open
+                                                    ? 'bg-ink text-white border-ink'
+                                                    : 'border-rule text-muted hover:text-ink hover:border-ink'
+                                                )}
+                                              >
+                                                <FileText size={10} /> {form.open ? 'On' : 'Off'}
+                                              </button>
+                                            )}
+                                            {/* Extract from PDF */}
+                                            {!linkedInv && cost.receiptUrl && cost.receiptType === 'pdf' && (
+                                              <button
+                                                onClick={() => { setCostForm(cost.id, { ...getCostFormRaw(cost.id), open: true }); extractCostPdf(cost.id) }}
+                                                disabled={form.extracting}
+                                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50"
+                                              >
+                                                <Sparkles size={9} /> {form.extracting ? 'Extracting…' : 'Extract from PDF'}
+                                              </button>
+                                            )}
+                                          </div>
+
+                                          {form.open && !linkedInv && (
+                                            <div className="bg-white border border-rule p-3 space-y-2">
+                                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                                                <div className="col-span-2">
+                                                  <label className="field-label">Supplier / Party</label>
+                                                  <input
+                                                    value={form.party}
+                                                    onChange={e => setCostForm(cost.id, { party: e.target.value })}
+                                                    placeholder="Supplier name"
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs text-ink focus:outline-none"
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="field-label">Invoice Ref</label>
+                                                  <input
+                                                    value={form.ref}
+                                                    onChange={e => setCostForm(cost.id, { ref: e.target.value })}
+                                                    placeholder="INV-001"
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="field-label">Due Date</label>
+                                                  <input
+                                                    type="date"
+                                                    value={form.due}
+                                                    onChange={e => setCostForm(cost.id, { due: e.target.value })}
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="field-label">Currency</label>
+                                                  <select
+                                                    value={form.currency}
+                                                    onChange={e => setCostForm(cost.id, { currency: e.target.value })}
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
+                                                  >
+                                                    {['£', '$', '€', 'AED', 'USD', 'EUR'].map(c => <option key={c} value={c}>{c}</option>)}
+                                                  </select>
+                                                </div>
+                                              </div>
+                                              <div className="flex items-end gap-3">
+                                                <div>
+                                                  <label className="field-label">Amount</label>
+                                                  <input
+                                                    type="number"
+                                                    value={form.amount}
+                                                    onChange={e => setCostForm(cost.id, { amount: parseFloat(e.target.value) || 0 })}
+                                                    min="0" step="0.01"
+                                                    className="border border-rule bg-paper px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none w-28"
+                                                  />
+                                                </div>
+                                                <button
+                                                  onClick={() => createInvoiceFromCost(cost.id)}
+                                                  disabled={form.creating || !form.party.trim()}
+                                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50"
+                                                >
+                                                  <FileText size={10} />
+                                                  {form.creating ? 'Creating…' : 'Create Payable Invoice'}
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )
+                                    })()}
                                   </div>
                                 )}
                               </div>
