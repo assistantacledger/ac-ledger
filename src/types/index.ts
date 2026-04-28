@@ -58,6 +58,7 @@ export interface Invoice {
   recurring: boolean
   pdf_url: string | null
   payment_schedule: PaymentInstalment[] | null
+  bank_details?: BankDetails | null
   created_at: string
 }
 

@@ -26,7 +26,7 @@ export async function POST(req: Request) {
           source: { type: 'base64', media_type: mediaType, data: base64 },
         }
 
-    const prompt = `You are an invoice data extraction assistant. Extract the following fields from this invoice document and return ONLY valid JSON with no extra text.
+    const prompt = `You are an invoice data extraction assistant. Extract fields from this invoice document and return ONLY valid JSON with no extra text.
 
 For each field, provide both a value and a confidence score (0.0 to 1.0).
 
@@ -37,6 +37,12 @@ Return this exact JSON structure:
   "amount": { "value": 0, "confidence": 0.0 },
   "currency": { "value": "£", "confidence": 0.0 },
   "due": { "value": "YYYY-MM-DD or null", "confidence": 0.0 },
+  "bankName": { "value": "... or null", "confidence": 0.0 },
+  "sortCode": { "value": "... or null", "confidence": 0.0 },
+  "accNum": { "value": "... or null", "confidence": 0.0 },
+  "accName": { "value": "... or null", "confidence": 0.0 },
+  "iban": { "value": "... or null", "confidence": 0.0 },
+  "swift": { "value": "... or null", "confidence": 0.0 },
   "project_code": { "value": "... or null", "confidence": 0.0 },
   "type": { "value": "payable or receivable", "confidence": 0.0 }
 }
@@ -47,9 +53,15 @@ Rules:
 - amount: total amount as a number (no currency symbol)
 - currency: £, $, or € based on the document
 - due: payment due date in YYYY-MM-DD format, or null if not found
+- bankName: bank name from payment details section, or null
+- sortCode: sort code (UK format XX-XX-XX or 6 digits), or null
+- accNum: bank account number (usually 8 digits), or null
+- accName: account holder name, or null
+- iban: IBAN number if present, or null
+- swift: SWIFT/BIC code if present, or null
 - project_code: any project code/number if present, or null
-- type: "payable" if this is a bill/invoice you received (you owe money), "receivable" if this is an invoice you issued (client owes you)
-- confidence: 1.0 = very clear, 0.8 = pretty sure, 0.5 = uncertain, 0.2 = guessing
+- type: "payable" if this is a bill/invoice you received (you owe money), "receivable" if this is an invoice you issued
+- confidence: 1.0 = very clear, 0.8 = pretty sure, 0.5 = uncertain, 0.2 = guessing, 0.0 = not found
 
 Only return the JSON object, nothing else.`
 

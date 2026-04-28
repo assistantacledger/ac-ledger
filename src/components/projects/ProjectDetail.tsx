@@ -6,8 +6,9 @@ import {
   ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, Eye,
   ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
   Sparkles, AlertCircle, Link2, Link2Off, Printer,
-  ChevronUp, ChevronDown, ChevronsUpDown,
+  ChevronUp, ChevronDown, ChevronsUpDown, Table2,
 } from 'lucide-react'
+import { PaymentSheet } from './PaymentSheet'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
@@ -22,7 +23,7 @@ import type {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'invoices' | 'expenses' | 'costs' | 'files-notes'
+type Tab = 'overview' | 'invoices' | 'expenses' | 'costs' | 'payment-sheet' | 'files-notes'
 
 const COST_CATEGORIES: CostCategory[] = ['Equipment', 'Travel', 'Crew', 'Talent', 'Venue', 'Software', 'Marketing', 'Other']
 const COST_STATUSES: CostStatus[] = ['planned', 'confirmed', 'paid']
@@ -162,22 +163,35 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [approvingExpense, setApprovingExpense] = useState<string | null>(null)
 
   // Cost → invoice forms (keyed by cost.id)
-  type CostInvoiceForm = { open: boolean; party: string; ref: string; due: string; currency: string; amount: number; creating: boolean; extracting: boolean }
+  type ExtractedField = { value: unknown; confidence: number }
+  type CostInvoiceForm = {
+    open: boolean
+    party: string; ref: string; due: string; currency: string; amount: number; notes: string
+    bankName: string; sortCode: string; accNum: string; accName: string; iban: string; swift: string
+    creating: boolean; extracting: boolean
+    confidence: Record<string, number>  // field → 0-1, set after AI extraction
+  }
+  const BLANK_FORM: Omit<CostInvoiceForm, 'open'> = {
+    party: '', ref: '', due: '', currency: '£', amount: 0, notes: '',
+    bankName: '', sortCode: '', accNum: '', accName: '', iban: '', swift: '',
+    creating: false, extracting: false, confidence: {},
+  }
   const [invoiceForms, setInvoiceForms] = useState<Record<string, CostInvoiceForm>>({})
 
   function getCostForm(costId: string, cost: ProjectCost): CostInvoiceForm {
     return invoiceForms[costId] ?? {
-      open: false, party: cost.description, ref: '', due: '', currency: '£',
-      amount: cost.actual || cost.estimated, creating: false, extracting: false,
+      ...BLANK_FORM, open: false,
+      party: cost.description, amount: cost.actual || cost.estimated,
+      notes: `Cost item: ${cost.description}`,
     }
   }
 
-  function setCostForm(costId: string, patch: Partial<CostInvoiceForm>) {
-    setInvoiceForms(prev => ({ ...prev, [costId]: { ...getCostFormRaw(costId), ...patch } }))
+  function getRawForm(costId: string): CostInvoiceForm {
+    return invoiceForms[costId] ?? { ...BLANK_FORM, open: false }
   }
 
-  function getCostFormRaw(costId: string): CostInvoiceForm {
-    return invoiceForms[costId] ?? { open: false, party: '', ref: '', due: '', currency: '£', amount: 0, creating: false, extracting: false }
+  function setCostForm(costId: string, patch: Partial<CostInvoiceForm>) {
+    setInvoiceForms(prev => ({ ...prev, [costId]: { ...getRawForm(costId), ...patch } }))
   }
 
   async function createInvoiceFromCost(costId: string) {
@@ -187,6 +201,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     const form = getCostForm(costId, cost)
     setCostForm(costId, { creating: true })
     try {
+      const hasBankDetails = form.bankName || form.sortCode || form.accNum || form.accName || form.iban || form.swift
+      const bankSummary = hasBankDetails
+        ? `\nBank: ${form.bankName} | Sort: ${form.sortCode} | Acc: ${form.accNum} | Name: ${form.accName}${form.iban ? ` | IBAN: ${form.iban}` : ''}${form.swift ? ` | SWIFT: ${form.swift}` : ''}`
+        : ''
+      const bankDetails = hasBankDetails ? {
+        accName: form.accName,
+        bankName: form.bankName || undefined,
+        sortCode: form.sortCode,
+        accNum: form.accNum,
+        iban: form.iban || undefined,
+        swift: form.swift || undefined,
+      } : null
       const data: InvoiceInsert = {
         type: 'payable',
         party: form.party || cost.description,
@@ -198,12 +224,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         entity: project.entity,
         project_code: project.code,
         project_name: project.name,
-        notes: `Cost: ${cost.description}`,
+        notes: (form.notes || `Cost: ${cost.description}`) + bankSummary,
         internal: null,
         line_items: null,
         recurring: false,
-        pdf_url: null,
+        pdf_url: cost.receiptUrl ?? null,
         payment_schedule: null,
+        bank_details: bankDetails,
       }
       const created = await createInvoice(data)
       addManualLink(costId, created.id)
@@ -219,9 +246,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     if (!anthropicKey) { toast('Anthropic API key not set — add it in Settings', 'error'); return }
     const cost = costs.find(c => c.id === costId)
     if (!cost?.receiptUrl) return
-    setCostForm(costId, { extracting: true })
+    setCostForm(costId, { extracting: true, open: true })
     try {
-      // Fetch the PDF from storage and convert to base64
       const response = await fetch(cost.receiptUrl)
       const blob = await response.blob()
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -235,16 +261,33 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base64, mediaType: blob.type || 'application/pdf', apiKey: anthropicKey }),
       })
-      const data = await res.json() as { extracted?: Record<string, { value: unknown }>; error?: string }
-      if (!res.ok || data.error) { toast(data.error ?? 'Extraction failed', 'error'); return }
+      const data = await res.json() as { extracted?: Record<string, ExtractedField>; error?: string }
+      if (!res.ok || data.error) { toast(data.error ?? 'Extraction failed', 'error'); setCostForm(costId, { extracting: false }); return }
       const ext = data.extracted!
+      const cur = getRawForm(costId)
+      const conf: Record<string, number> = {}
+      const pick = (key: string, fallback: string): string => {
+        const f = ext[key]
+        if (f && f.value !== null && String(f.value).trim()) {
+          conf[key] = Number(f.confidence ?? 0)
+          return String(f.value)
+        }
+        return fallback
+      }
       setCostForm(costId, {
         extracting: false,
-        party: String(ext.party?.value ?? getCostFormRaw(costId).party),
-        ref: String(ext.ref?.value ?? getCostFormRaw(costId).ref),
-        amount: Number(ext.amount?.value ?? getCostFormRaw(costId).amount),
-        currency: String(ext.currency?.value ?? '£'),
-        due: ext.due?.value ? String(ext.due.value) : getCostFormRaw(costId).due,
+        party:    pick('party',    cur.party || cost.description),
+        ref:      pick('ref',      cur.ref),
+        amount:   ext.amount?.value ? Number(ext.amount.value) : (cur.amount || cost.actual || cost.estimated),
+        currency: pick('currency', cur.currency || '£'),
+        due:      pick('due',      cur.due),
+        bankName: pick('bankName', cur.bankName),
+        sortCode: pick('sortCode', cur.sortCode),
+        accNum:   pick('accNum',   cur.accNum),
+        accName:  pick('accName',  cur.accName),
+        iban:     pick('iban',     cur.iban),
+        swift:    pick('swift',    cur.swift),
+        confidence: { ...conf, amount: Number(ext.amount?.confidence ?? 0) },
       })
       toast('Details extracted from PDF')
     } catch (e) {
@@ -758,12 +801,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  const payableCount = projInvoices.filter(i => i.type === 'payable').length
   const TABS: { key: Tab; label: string }[] = [
-    { key: 'overview', label: 'Overview' },
-    { key: 'invoices', label: `Invoices (${projInvoices.length})` },
-    { key: 'expenses', label: `Expenses (${projExpenses.length})` },
-    { key: 'costs', label: `Costs (${costs.length})` },
-    { key: 'files-notes', label: `Files & Notes (${files.length + notes.length})` },
+    { key: 'overview',       label: 'Overview' },
+    { key: 'invoices',       label: `Invoices (${projInvoices.length})` },
+    { key: 'expenses',       label: `Expenses (${projExpenses.length})` },
+    { key: 'costs',          label: `Costs (${costs.length})` },
+    { key: 'payment-sheet',  label: `Payment Sheet${payableCount > 0 ? ` (${payableCount})` : ''}` },
+    { key: 'files-notes',    label: `Files & Notes (${files.length + notes.length})` },
   ]
 
   return (
@@ -1099,6 +1144,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         </td>
                         <td className="px-4 py-2">
                           <div className="row-actions justify-end gap-1">
+                            {(() => {
+                              // View Receipt — shows if cost linked to this invoice has a receipt
+                              const link = reconLinks.manual.find(m => m.invoiceId === inv.id)
+                              const linkedCost = link ? costs.find(c => c.id === link.costId) : null
+                              if (!linkedCost?.receiptUrl) return null
+                              return linkedCost.receiptType === 'image' ? (
+                                <button onClick={() => setLightboxUrl({ url: linkedCost.receiptUrl!, name: linkedCost.description })}
+                                  title="View cost receipt"
+                                  className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-rule">
+                                  <ImageIcon size={10} /> Receipt
+                                </button>
+                              ) : (
+                                <a href={linkedCost.receiptUrl} target="_blank" rel="noopener noreferrer"
+                                  title="View cost receipt PDF"
+                                  className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-rule">
+                                  <FileText size={10} /> Receipt
+                                </a>
+                              )
+                            })()}
                             <button onClick={() => setPreviewInvoice(inv)} title="Preview PDF"
                               className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100">
                               <Eye size={12} />
@@ -1560,105 +1624,144 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       )}
                                     </div>
 
-                                    {/* This is an invoice */}
+                                    {/* Mark as Invoice */}
                                     {createInvoice && (() => {
                                       const form = getCostForm(cost.id, cost)
                                       const existingLink = reconLinks.manual.find(m => m.costId === cost.id)
                                       const linkedInv = existingLink ? projInvoices.find(i => i.id === existingLink.invoiceId) : null
+                                      const hasPdf = cost.receiptUrl && cost.receiptType === 'pdf'
+                                      function conf(field: string) {
+                                        const c = form.confidence[field] ?? 0
+                                        if (c === 0) return null
+                                        return c >= 0.8
+                                          ? <span className="inline-block w-1.5 h-1.5 rounded-full bg-ac-green ml-1" title={`AI confidence: ${Math.round(c * 100)}%`} />
+                                          : <span className="inline-block w-1.5 h-1.5 rounded-full bg-ac-amber ml-1" title={`AI confidence: ${Math.round(c * 100)}%`} />
+                                      }
                                       return (
                                         <div className="border-t border-rule pt-3 space-y-2">
+                                          {/* Header row */}
                                           <div className="flex items-center gap-3 flex-wrap">
-                                            <span className="field-label">This is an invoice</span>
+                                            <span className="field-label">Mark as Invoice</span>
                                             {linkedInv ? (
                                               <span className="font-mono text-xs text-ac-green flex items-center gap-1">
-                                                <CheckCircle size={10} /> Invoice linked: {linkedInv.ref || linkedInv.id.slice(0, 8)}
+                                                <CheckCircle size={10} /> Invoice created: {linkedInv.ref || linkedInv.id.slice(0, 8)} · {linkedInv.status}
                                               </span>
                                             ) : (
-                                              <button
-                                                onClick={() => setCostForm(cost.id, { ...getCostFormRaw(cost.id), open: !form.open, party: form.open ? form.party : cost.description, amount: form.open ? form.amount : (cost.actual || cost.estimated) })}
-                                                className={cn(
-                                                  'flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider border transition-colors',
-                                                  form.open
-                                                    ? 'bg-ink text-white border-ink'
-                                                    : 'border-rule text-muted hover:text-ink hover:border-ink'
+                                              <>
+                                                <button
+                                                  onClick={() => setCostForm(cost.id, { open: !form.open })}
+                                                  className={cn(
+                                                    'flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider border transition-colors',
+                                                    form.open ? 'bg-ink text-white border-ink' : 'border-rule text-muted hover:text-ink hover:border-ink'
+                                                  )}
+                                                >
+                                                  <FileText size={10} /> {form.open ? 'Cancel' : 'Fill manually'}
+                                                </button>
+                                                {hasPdf && (
+                                                  <button
+                                                    onClick={() => extractCostPdf(cost.id)}
+                                                    disabled={form.extracting}
+                                                    className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink hover:border-rule transition-colors disabled:opacity-50 bg-cream"
+                                                  >
+                                                    <Sparkles size={9} className="text-purple-500" />
+                                                    {form.extracting ? 'Extracting…' : 'Extract from PDF with AI'}
+                                                  </button>
                                                 )}
-                                              >
-                                                <FileText size={10} /> {form.open ? 'On' : 'Off'}
-                                              </button>
-                                            )}
-                                            {/* Extract from PDF */}
-                                            {!linkedInv && cost.receiptUrl && cost.receiptType === 'pdf' && (
-                                              <button
-                                                onClick={() => { setCostForm(cost.id, { ...getCostFormRaw(cost.id), open: true }); extractCostPdf(cost.id) }}
-                                                disabled={form.extracting}
-                                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50"
-                                              >
-                                                <Sparkles size={9} /> {form.extracting ? 'Extracting…' : 'Extract from PDF'}
-                                              </button>
+                                              </>
                                             )}
                                           </div>
 
+                                          {/* Invoice form */}
                                           {form.open && !linkedInv && (
-                                            <div className="bg-white border border-rule p-3 space-y-2">
-                                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                                            <div className="bg-white border border-rule p-3 space-y-3">
+                                              {/* Row 1: core fields */}
+                                              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
                                                 <div className="col-span-2">
-                                                  <label className="field-label">Supplier / Party</label>
-                                                  <input
-                                                    value={form.party}
+                                                  <label className="field-label flex items-center">Supplier / Party{conf('party')}</label>
+                                                  <input value={form.party}
                                                     onChange={e => setCostForm(cost.id, { party: e.target.value })}
                                                     placeholder="Supplier name"
-                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs text-ink focus:outline-none"
-                                                  />
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs text-ink focus:outline-none" />
                                                 </div>
                                                 <div>
-                                                  <label className="field-label">Invoice Ref</label>
-                                                  <input
-                                                    value={form.ref}
+                                                  <label className="field-label flex items-center">Invoice Ref{conf('ref')}</label>
+                                                  <input value={form.ref}
                                                     onChange={e => setCostForm(cost.id, { ref: e.target.value })}
                                                     placeholder="INV-001"
-                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
-                                                  />
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
                                                 </div>
                                                 <div>
-                                                  <label className="field-label">Due Date</label>
-                                                  <input
-                                                    type="date"
-                                                    value={form.due}
+                                                  <label className="field-label flex items-center">Due Date{conf('due')}</label>
+                                                  <input type="date" value={form.due}
                                                     onChange={e => setCostForm(cost.id, { due: e.target.value })}
-                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
-                                                  />
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
                                                 </div>
                                                 <div>
-                                                  <label className="field-label">Currency</label>
-                                                  <select
-                                                    value={form.currency}
+                                                  <label className="field-label flex items-center">Currency{conf('currency')}</label>
+                                                  <select value={form.currency}
                                                     onChange={e => setCostForm(cost.id, { currency: e.target.value })}
-                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none"
-                                                  >
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none">
                                                     {['£', '$', '€', 'AED', 'USD', 'EUR'].map(c => <option key={c} value={c}>{c}</option>)}
                                                   </select>
                                                 </div>
-                                              </div>
-                                              <div className="flex items-end gap-3">
                                                 <div>
-                                                  <label className="field-label">Amount</label>
-                                                  <input
-                                                    type="number"
-                                                    value={form.amount}
+                                                  <label className="field-label flex items-center">Amount{conf('amount')}</label>
+                                                  <input type="number" value={form.amount}
                                                     onChange={e => setCostForm(cost.id, { amount: parseFloat(e.target.value) || 0 })}
                                                     min="0" step="0.01"
-                                                    className="border border-rule bg-paper px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none w-28"
-                                                  />
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                                </div>
+                                              </div>
+
+                                              {/* Row 2: bank details */}
+                                              <div>
+                                                <p className="field-label mb-1.5 text-blue-600">Bank Details</p>
+                                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                                                  {([
+                                                    { key: 'bankName' as const, label: 'Bank Name',    placeholder: 'HSBC' },
+                                                    { key: 'sortCode' as const, label: 'Sort Code',    placeholder: '12-34-56' },
+                                                    { key: 'accNum'  as const, label: 'Account No',   placeholder: '12345678' },
+                                                    { key: 'accName' as const, label: 'Account Name', placeholder: 'Supplier Ltd' },
+                                                    { key: 'iban'    as const, label: 'IBAN',          placeholder: 'GB29NWBK…' },
+                                                    { key: 'swift'   as const, label: 'SWIFT/BIC',     placeholder: 'NWBKGB2L' },
+                                                  ] as { key: keyof CostInvoiceForm & string; label: string; placeholder: string }[]).map(({ key, label, placeholder }) => (
+                                                    <div key={key}>
+                                                      <label className="field-label flex items-center">{label}{conf(key)}</label>
+                                                      <input
+                                                        value={form[key] as string}
+                                                        onChange={e => setCostForm(cost.id, { [key]: e.target.value })}
+                                                        placeholder={placeholder}
+                                                        className="w-full border border-rule bg-blue-50/30 px-2 py-1 text-xs font-mono text-ink focus:outline-none focus:border-blue-300"
+                                                      />
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </div>
+
+                                              {/* Row 3: notes + save */}
+                                              <div className="flex items-end gap-3 flex-wrap">
+                                                <div className="flex-1 min-w-[180px]">
+                                                  <label className="field-label">Notes</label>
+                                                  <input value={form.notes}
+                                                    onChange={e => setCostForm(cost.id, { notes: e.target.value })}
+                                                    className="w-full border border-rule bg-paper px-2 py-1 text-xs text-ink focus:outline-none" />
                                                 </div>
                                                 <button
                                                   onClick={() => createInvoiceFromCost(cost.id)}
                                                   disabled={form.creating || !form.party.trim()}
-                                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50"
+                                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50 whitespace-nowrap"
                                                 >
-                                                  <FileText size={10} />
-                                                  {form.creating ? 'Creating…' : 'Create Payable Invoice'}
+                                                  <CheckCircle size={10} />
+                                                  {form.creating ? 'Saving…' : 'Save as Invoice'}
                                                 </button>
                                               </div>
+
+                                              {Object.keys(form.confidence).length > 0 && (
+                                                <p className="font-mono text-[9px] text-muted flex items-center gap-2">
+                                                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-ac-green" /> High confidence
+                                                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-ac-amber" /> Lower confidence — please verify
+                                                </p>
+                                              )}
                                             </div>
                                           )}
                                         </div>
@@ -1761,6 +1864,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
             </div>
 
             <p className="font-mono text-[10px] text-muted">Click a row to edit · Drag <GripVertical size={10} className="inline" /> to reorder · Changes save instantly</p>
+          </div>
+        )}
+
+        {/* ── Payment Sheet ── */}
+        {tab === 'payment-sheet' && (
+          <div className="p-6">
+            <PaymentSheet
+              invoices={projInvoices}
+              project={project}
+              costs={costs}
+              reconLinks={reconLinks}
+              updateInvoice={updateInvoice}
+            />
           </div>
         )}
 

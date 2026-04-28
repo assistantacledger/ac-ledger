@@ -5,9 +5,10 @@ import { Header } from '@/components/layout/Header'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useExpenses } from '@/hooks/useExpenses'
 import { usePayRuns } from '@/hooks/usePayRuns'
+import { PaymentSheet } from '@/components/projects/PaymentSheet'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
-import { Plus, Trash2, Play, Upload, X, CheckCircle, AlertCircle, HelpCircle, ChevronDown, ChevronRight } from 'lucide-react'
-import type { PayRun, PayRunItem, Invoice, Expense } from '@/types'
+import { Plus, Trash2, Play, Upload, X, CheckCircle, AlertCircle, HelpCircle, ChevronDown, ChevronRight, Table2 } from 'lucide-react'
+import type { PayRun, PayRunItem, Invoice, Expense, Project } from '@/types'
 
 type Tab = 'runs' | 'reconcile'
 
@@ -20,15 +21,11 @@ interface MatchedRow extends CsvRow { status: MatchStatus; matchRef?: string; ma
 function parseCSV(text: string): CsvRow[] {
   const lines = text.trim().split('\n').filter(Boolean)
   if (lines.length < 2) return []
-  // Auto-detect: skip header row, parse columns
   const rows: CsvRow[] = []
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''))
     if (cols.length < 3) continue
-    // Heuristic: find a numeric column for amount
-    let amount = 0
-    let dateStr = ''
-    let desc = ''
+    let amount = 0; let dateStr = ''; let desc = ''
     for (let j = 0; j < cols.length; j++) {
       const num = parseFloat(cols[j].replace(/[£$€,]/g, ''))
       if (!isNaN(num) && cols[j].match(/[\d.]+/)) { amount = Math.abs(num); continue }
@@ -43,22 +40,24 @@ function parseCSV(text: string): CsvRow[] {
 function matchRows(csvRows: CsvRow[], invoices: Invoice[]): MatchedRow[] {
   const open = invoices.filter(i => !['paid', 'draft'].includes(i.status))
   return csvRows.map(row => {
-    // 1. Exact ref match
-    const refMatch = open.find(i =>
-      i.ref && row.description.toLowerCase().includes(i.ref.toLowerCase())
-    )
+    const refMatch = open.find(i => i.ref && row.description.toLowerCase().includes(i.ref.toLowerCase()))
     if (refMatch) return { ...row, status: 'matched' as MatchStatus, matchRef: refMatch.ref, matchParty: refMatch.party }
-    // 2. Amount match (within £0.50)
     const amtMatch = open.find(i => Math.abs(Number(i.amount) - row.amount) < 0.50)
     if (amtMatch) return { ...row, status: 'possible' as MatchStatus, matchRef: amtMatch.ref, matchParty: amtMatch.party }
     return { ...row, status: 'unmatched' as MatchStatus }
   })
 }
 
+// ─── LS helpers ───────────────────────────────────────────────────────────────
+
+function lsGet<T>(key: string, fallback: T): T {
+  try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback } catch { return fallback }
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AccountsPage() {
-  const { invoices, markPaid } = useInvoices()
+  const { invoices, markPaid, updateInvoice } = useInvoices()
   const { expenses } = useExpenses()
   const { runs, createRun, deleteRun, executeRun } = usePayRuns()
 
@@ -73,11 +72,19 @@ export default function AccountsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set())
 
+  // ── Payment Sheet modal ────────────────────────────────────────────────────
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [sheetProject, setSheetProject] = useState<string>('')
+  // Load projects from localStorage
+  const allProjects = useMemo<Project[]>(() => lsGet<Project[]>('ledger_projects', []), [])
+  const sheetProjectObj = useMemo(() => allProjects.find(p => p.code === sheetProject) ?? null, [allProjects, sheetProject])
+  const sheetCosts = useMemo(() => sheetProject ? lsGet(`project_costs_${sheetProject}`, []) : [], [sheetProject])
+  const sheetReconLinks = useMemo(() => sheetProject ? lsGet(`project_cost_links_${sheetProject}`, { manual: [], broken: [] }) : { manual: [], broken: [] }, [sheetProject])
+
   function toggleRun(id: string) {
     setExpandedRuns(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
 
-  // Items available to add to a run: open payable invoices + approved expenses
   const payableItems = useMemo(() => [
     ...invoices
       .filter(i => i.type === 'payable' && !['paid', 'draft'].includes(i.status))
@@ -97,25 +104,34 @@ export default function AccountsPage() {
   function handleCreateRun() {
     if (!runName.trim() || selectedItems.length === 0) return
     createRun(runName.trim(), runDate, selectedItems)
-    setBuilding(false)
-    setRunName('')
-    setSelected(new Set())
+    setBuilding(false); setRunName(''); setSelected(new Set())
   }
 
   async function handleExecute(id: string) {
     setExecuting(id)
-    try {
-      await executeRun(id)
-    } catch (e) {
-      alert(String(e))
-    } finally {
-      setExecuting(null)
-    }
+    try { await executeRun(id) } catch (e) { alert(String(e)) } finally { setExecuting(null) }
   }
 
   function handleDeleteRun(id: string) {
     if (deleteConfirm === id) { deleteRun(id); setDeleteConfirm(null) }
     else { setDeleteConfirm(id); setTimeout(() => setDeleteConfirm(null), 3000) }
+  }
+
+  // Add invoices from payment sheet to payment run builder
+  function handleAddToRun(selInvoices: Invoice[]) {
+    const items: PayRunItem[] = selInvoices.map(i => ({
+      id: i.id, type: 'invoice', party: i.party, ref: i.ref ?? '',
+      amount: Number(i.amount), currency: i.currency,
+      projectLabel: i.project_code ?? i.project_name ?? '',
+    }))
+    setSelected(prev => {
+      const n = new Set(prev)
+      items.forEach(item => n.add(item.id))
+      return n
+    })
+    setSheetOpen(false)
+    setBuilding(true)
+    if (!runName) setRunName(`${sheetProject} Payment`)
   }
 
   // ── Bank reconcile ─────────────────────────────────────────────────────────
@@ -128,8 +144,7 @@ export default function AccountsPage() {
     reader.onload = e => {
       const text = e.target?.result as string
       setCsvText(text)
-      const rows = parseCSV(text)
-      setMatchedRows(matchRows(rows, invoices))
+      setMatchedRows(matchRows(parseCSV(text), invoices))
     }
     reader.readAsText(file)
   }
@@ -146,7 +161,7 @@ export default function AccountsPage() {
       <main className="flex-1 overflow-y-auto px-6 py-6">
 
         {/* Tabs */}
-        <div className="flex border-b border-rule mb-6">
+        <div className="flex border-b border-rule mb-6 gap-0">
           {(['runs', 'reconcile'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={cn('px-5 py-2.5 font-mono text-xs uppercase tracking-wider border-b-2 -mb-px transition-colors',
@@ -154,6 +169,13 @@ export default function AccountsPage() {
               {t === 'runs' ? 'Payment Runs' : 'Bank Reconcile'}
             </button>
           ))}
+          {/* Payment Sheet button — always visible */}
+          <div className="flex-1" />
+          <button
+            onClick={() => setSheetOpen(true)}
+            className="flex items-center gap-1.5 mb-1 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
+            <Table2 size={11} /> Payment Sheet
+          </button>
         </div>
 
         {/* ── Payment Runs ──────────────────────────────────────────────────── */}
@@ -166,7 +188,6 @@ export default function AccountsPage() {
               </button>
             )}
 
-            {/* Run builder */}
             {building && (
               <div className="s-section">
                 <div className="flex items-center justify-between mb-4">
@@ -210,7 +231,8 @@ export default function AccountsPage() {
                             className={cn('border-b border-rule last:border-0 cursor-pointer transition-colors',
                               selected.has(item.id) ? 'bg-ac-green-pale' : 'hover:bg-cream/60')}>
                             <td className="px-3 py-2.5 text-center">
-                              <input type="checkbox" readOnly checked={selected.has(item.id)} className="accent-ink" onClick={e => e.stopPropagation()} onChange={() => toggleItem(item.id)} />
+                              <input type="checkbox" readOnly checked={selected.has(item.id)} className="accent-ink"
+                                onClick={e => e.stopPropagation()} onChange={() => toggleItem(item.id)} />
                             </td>
                             <td className="px-3 py-2.5">
                               <span className="font-mono text-[10px] uppercase tracking-wider text-muted">{item.type}</span>
@@ -234,8 +256,7 @@ export default function AccountsPage() {
                       className="px-4 py-2 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink transition-colors">
                       Cancel
                     </button>
-                    <button
-                      onClick={handleCreateRun}
+                    <button onClick={handleCreateRun}
                       disabled={!runName.trim() || selectedItems.length === 0}
                       className="px-4 py-2 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-40">
                       Create Run
@@ -245,7 +266,6 @@ export default function AccountsPage() {
               </div>
             )}
 
-            {/* Runs list */}
             {runs.length === 0 && !building ? (
               <div className="tbl-card py-12 text-center">
                 <p className="font-mono text-xs text-muted uppercase tracking-wider">No payment runs yet</p>
@@ -272,15 +292,12 @@ export default function AccountsPage() {
                           {isExecuted ? (
                             <span className="badge badge-paid">Executed</span>
                           ) : (
-                            <button
-                              onClick={() => handleExecute(run.id)}
-                              disabled={executing === run.id}
+                            <button onClick={() => handleExecute(run.id)} disabled={executing === run.id}
                               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:bg-[#2d6147] transition-colors disabled:opacity-50">
                               <Play size={10} /> {executing === run.id ? 'Running…' : 'Execute'}
                             </button>
                           )}
-                          <button
-                            onClick={() => handleDeleteRun(run.id)}
+                          <button onClick={() => handleDeleteRun(run.id)}
                             className={cn('p-1.5 transition-colors', deleteConfirm === run.id ? 'text-red-600' : 'text-muted hover:text-red-500')}>
                             <Trash2 size={13} />
                           </button>
@@ -331,11 +348,10 @@ export default function AccountsPage() {
 
             {matchedRows.length > 0 && (
               <>
-                {/* Summary */}
                 <div className="grid grid-cols-3 gap-4">
                   {[
-                    { label: 'Matched', count: matchCounts.matched, accent: '#3a7a5a', icon: <CheckCircle size={14} /> },
-                    { label: 'Possible', count: matchCounts.possible, accent: '#7a6a3a', icon: <AlertCircle size={14} /> },
+                    { label: 'Matched',   count: matchCounts.matched,   accent: '#3a7a5a', icon: <CheckCircle size={14} /> },
+                    { label: 'Possible',  count: matchCounts.possible,  accent: '#7a6a3a', icon: <AlertCircle size={14} /> },
                     { label: 'Unmatched', count: matchCounts.unmatched, accent: '#9a9a9a', icon: <HelpCircle size={14} /> },
                   ].map(({ label, count, accent, icon }) => (
                     <div key={label} className="stat-card" style={{ borderTopColor: accent } as React.CSSProperties}>
@@ -349,7 +365,6 @@ export default function AccountsPage() {
                   ))}
                 </div>
 
-                {/* Matched rows */}
                 <div className="tbl-card">
                   <div className="tbl-hd">
                     <p className="tbl-lbl">Transaction Matches</p>
@@ -371,8 +386,8 @@ export default function AccountsPage() {
                         {matchedRows.map((row, idx) => {
                           const colors = { matched: 'bg-ac-green-pale', possible: 'bg-ac-amber-pale', unmatched: 'bg-red-50' }
                           const icons = {
-                            matched: <CheckCircle size={13} className="text-ac-green" />,
-                            possible: <AlertCircle size={13} className="text-ac-amber" />,
+                            matched:   <CheckCircle size={13} className="text-ac-green" />,
+                            possible:  <AlertCircle size={13} className="text-ac-amber" />,
                             unmatched: <HelpCircle size={13} className="text-muted" />,
                           }
                           return (
@@ -398,6 +413,58 @@ export default function AccountsPage() {
           </div>
         )}
       </main>
+
+      {/* ── Payment Sheet Modal ── */}
+      {sheetOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="flex-1 flex flex-col bg-paper m-4 md:m-8 border border-rule shadow-xl overflow-hidden">
+            {/* Modal header */}
+            <div className="flex items-center gap-4 px-6 py-4 border-b border-rule bg-white flex-shrink-0">
+              <Table2 size={14} className="text-muted" />
+              <p className="font-semibold text-sm text-ink">Payment Sheet</p>
+              <div className="flex-1" />
+              {/* Project selector */}
+              <div className="flex items-center gap-2">
+                <label className="font-mono text-xs text-muted uppercase tracking-wider">Project</label>
+                <select
+                  value={sheetProject}
+                  onChange={e => setSheetProject(e.target.value)}
+                  className="border border-rule bg-paper px-3 py-1.5 text-sm font-mono text-ink focus:outline-none focus:border-ink"
+                >
+                  <option value="">— Select project —</option>
+                  {allProjects.map(p => (
+                    <option key={p.code} value={p.code}>{p.code} — {p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button onClick={() => setSheetOpen(false)} className="text-muted hover:text-ink transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {!sheetProject ? (
+                <div className="flex flex-col items-center justify-center py-24 gap-3">
+                  <Table2 size={28} className="text-muted" />
+                  <p className="font-mono text-xs text-muted uppercase tracking-wider">Select a project to view its payment sheet</p>
+                </div>
+              ) : !sheetProjectObj ? (
+                <p className="font-mono text-xs text-muted text-center py-12">Project not found</p>
+              ) : (
+                <PaymentSheet
+                  invoices={invoices.filter(i => i.project_code === sheetProject)}
+                  project={sheetProjectObj}
+                  costs={sheetCosts}
+                  reconLinks={sheetReconLinks}
+                  updateInvoice={updateInvoice}
+                  onAddToRun={handleAddToRun}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
