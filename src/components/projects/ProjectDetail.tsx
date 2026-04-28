@@ -232,7 +232,20 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         payment_schedule: null,
         bank_details: bankDetails,
       }
-      const created = await createInvoice(data)
+      let created: Invoice
+      try {
+        created = await createInvoice(data)
+      } catch (e) {
+        const msg = String(e).toLowerCase()
+        if (msg.includes('bank_details') || msg.includes('column')) {
+          // bank_details column not yet migrated — retry without it
+          const { bank_details: _bd, ...dataWithout } = data
+          created = await createInvoice(dataWithout as InvoiceInsert)
+          if (bankDetails) {
+            try { localStorage.setItem(`invoice_bank_${created.id}`, JSON.stringify(bankDetails)) } catch { /* ignore */ }
+          }
+        } else { throw e }
+      }
       addManualLink(costId, created.id)
       setCostForm(costId, { open: false, creating: false })
       toast('Payable invoice created and linked')
@@ -1673,7 +1686,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
                                           {/* Invoice form */}
                                           {form.open && !linkedInv && (
-                                            <div className="bg-white border border-rule p-3 space-y-3">
+                                            <div className="bg-white border border-rule overflow-hidden">
+                                              <div className={cost.receiptUrl ? 'flex flex-col sm:flex-row' : ''}>
+                                                {/* Left: receipt viewer (side-by-side on sm+) */}
+                                                {cost.receiptUrl && (
+                                                  <div className="sm:w-[45%] border-b sm:border-b-0 sm:border-r border-rule bg-cream flex items-center justify-center" style={{ minHeight: 380 }}>
+                                                    {cost.receiptType === 'image'
+                                                      ? <img src={cost.receiptUrl} alt="Receipt" className="w-full h-full object-contain" style={{ maxHeight: 480 }} />
+                                                      : <iframe src={cost.receiptUrl} className="w-full border-0 bg-white" style={{ height: 480, minHeight: 380 }} title="Invoice PDF" />
+                                                    }
+                                                  </div>
+                                                )}
+                                                {/* Right (or full width): form fields */}
+                                                <div className={`p-3 space-y-3${cost.receiptUrl ? ' sm:flex-1' : ''}`}>
                                               {/* Row 1: core fields */}
                                               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
                                                 <div className="col-span-2">
@@ -1762,6 +1787,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-ac-amber" /> Lower confidence — please verify
                                                 </p>
                                               )}
+                                                </div>{/* end right/form column */}
+                                              </div>{/* end flex row */}
                                             </div>
                                           )}
                                         </div>

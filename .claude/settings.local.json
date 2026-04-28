@@ -10,7 +10,10 @@
       "Skill(claude-api)",
       "Bash(npm info:*)",
       "Bash(sudo chown:*)",
-      "Bash(grep -E \"^xlsx$|^sheetjs\")"
+      "Bash(grep -E \"^xlsx$|^sheetjs\")",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)"
     ]
   }
 }

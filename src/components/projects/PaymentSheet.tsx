@@ -3,7 +3,10 @@
 import { useState, useMemo } from 'react'
 import { cn, fmt, fmtDate } from '@/lib/format'
 import { toast } from '@/lib/toast'
-import { Download, FileText, CheckCircle, Eye, ExternalLink, X } from 'lucide-react'
+import {
+  Download, FileText, CheckCircle, ExternalLink, X,
+  ChevronUp, ChevronDown, Search, Filter,
+} from 'lucide-react'
 import type { Invoice, InvoiceUpdate, ProjectCost, Project, BankDetails } from '@/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -22,6 +25,8 @@ export interface PaymentSheetProps {
 type BankField = 'bankName' | 'sortCode' | 'accNum' | 'accName' | 'iban' | 'swift'
 type InvField = 'party' | 'ref' | 'due' | 'amount' | 'currency' | 'status'
 type FieldKey = InvField | BankField
+type SortKey = 'party' | 'due' | 'amount' | 'status'
+type SortDir = 'asc' | 'desc'
 
 const STATUS_OPTIONS = ['draft', 'pending', 'submitted', 'approved', 'sent', 'overdue', 'part-paid', 'paid']
 const CURRENCIES = ['£', '$', '€', 'AED', 'USD', 'EUR']
@@ -30,7 +35,7 @@ const INV_COLS: { key: InvField; label: string; cls: string }[] = [
   { key: 'party',    label: 'Supplier / Party', cls: 'min-w-[140px]' },
   { key: 'ref',      label: 'Invoice Ref',       cls: 'min-w-[100px]' },
   { key: 'due',      label: 'Due Date',          cls: 'min-w-[95px]' },
-  { key: 'amount',   label: 'Amount',            cls: 'min-w-[85px] text-right' },
+  { key: 'amount',   label: 'Amount',            cls: 'min-w-[85px]' },
   { key: 'currency', label: 'Ccy',               cls: 'w-12' },
   { key: 'status',   label: 'Status',            cls: 'min-w-[80px]' },
 ]
@@ -50,46 +55,138 @@ const STATUS_BADGE: Record<string, string> = {
   sent: 'badge-sent', 'part-paid': 'badge-part-paid',
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function urlType(url: string): 'image' | 'pdf' {
+  const l = url.toLowerCase().split('?')[0]
+  if (l.match(/\.(jpg|jpeg|png|gif|webp)/)) return 'image'
+  return 'pdf'
+}
+
+/** Parse bank details from the formatted notes string written by createInvoiceFromCost */
+function parseBankFromNotes(notes: string | null): Partial<BankDetails> | null {
+  if (!notes || !notes.includes('Bank:')) return null
+  const get = (label: string) => {
+    const m = notes.match(new RegExp(`${label}:\\s*([^|\\n]+)`))
+    return m ? m[1].trim() : undefined
+  }
+  const bankName = get('Bank')
+  if (!bankName) return null
+  return { bankName, sortCode: get('Sort'), accNum: get('Acc'), accName: get('Name'), iban: get('IBAN'), swift: get('SWIFT') }
+}
+
+/** Resolve bank details from invoice (Supabase column → LS fallback → parsed notes) */
+function resolveBankDetails(inv: Invoice): Partial<BankDetails> {
+  if (inv.bank_details) return inv.bank_details
+  try {
+    const ls = localStorage.getItem(`invoice_bank_${inv.id}`)
+    if (ls) return JSON.parse(ls) as BankDetails
+  } catch { /* ignore */ }
+  return parseBankFromNotes(inv.notes) ?? {}
+}
+
+/** Get receipt info: check inv.pdf_url first, then linked cost via reconLinks */
+function resolveReceipt(inv: Invoice, costs?: ProjectCost[], reconLinks?: ReconLinks): { url: string; type: 'image' | 'pdf' } | null {
+  if (inv.pdf_url) return { url: inv.pdf_url, type: urlType(inv.pdf_url) }
+  if (!reconLinks?.manual || !costs) return null
+  const link = reconLinks.manual.find(m => m.invoiceId === inv.id)
+  const cost = link ? costs.find(c => c.id === link.costId) : null
+  if (!cost?.receiptUrl) return null
+  return { url: cost.receiptUrl, type: cost.receiptType ?? 'pdf' }
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoice, onAddToRun }: PaymentSheetProps) {
   const payable = useMemo(() => invoices.filter(i => i.type === 'payable'), [invoices])
 
+  // ── Cell editing state ──
   const [editing, setEditing] = useState<{ id: string; field: FieldKey } | null>(null)
   const [editVal, setEditVal] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
+
+  // ── Selection (for add-to-run) ──
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null)
 
-  // ── Helpers ──
-  function getReceipt(inv: Invoice): { url: string; type: 'image' | 'pdf' } | null {
-    if (!reconLinks?.manual || !costs) return null
-    const link = reconLinks.manual.find(m => m.invoiceId === inv.id)
-    if (!link) return null
-    const cost = costs.find(c => c.id === link.costId)
-    if (!cost?.receiptUrl) return null
-    return { url: cost.receiptUrl, type: cost.receiptType ?? 'pdf' }
-  }
+  // ── Lightbox ──
+  const [lightbox, setLightbox] = useState<{ url: string; name: string; type: 'image' | 'pdf' } | null>(null)
 
+  // ── Filters / sort ──
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [sortBy, setSortBy] = useState<SortKey>('due')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  // ── Category lookup ──
   function getCategory(inv: Invoice): string {
     if (!reconLinks?.manual || !costs) return '—'
     const link = reconLinks.manual.find(m => m.invoiceId === inv.id)
     return costs.find(c => c.id === link?.costId)?.category ?? '—'
   }
 
+  // ── Raw value for a cell (for editing) ──
   function rawVal(inv: Invoice, field: FieldKey): string {
-    if (field === 'due')      return inv.due ?? ''
-    if (field === 'amount')   return String(inv.amount)
-    if (field === 'bankName') return inv.bank_details?.bankName ?? ''
-    if (field === 'sortCode') return inv.bank_details?.sortCode ?? ''
-    if (field === 'accNum')   return inv.bank_details?.accNum ?? ''
-    if (field === 'accName')  return inv.bank_details?.accName ?? ''
-    if (field === 'iban')     return inv.bank_details?.iban ?? ''
-    if (field === 'swift')    return inv.bank_details?.swift ?? ''
+    const bankFields: BankField[] = ['bankName', 'sortCode', 'accNum', 'accName', 'iban', 'swift']
+    if (bankFields.includes(field as BankField)) {
+      const bd = resolveBankDetails(inv)
+      if (field === 'bankName') return bd.bankName ?? ''
+      if (field === 'sortCode') return bd.sortCode ?? ''
+      if (field === 'accNum')   return bd.accNum ?? ''
+      if (field === 'accName')  return bd.accName ?? ''
+      if (field === 'iban')     return bd.iban ?? ''
+      if (field === 'swift')    return bd.swift ?? ''
+    }
+    if (field === 'due')    return inv.due ?? ''
+    if (field === 'amount') return String(inv.amount)
     return String((inv as unknown as Record<string, unknown>)[field] ?? '')
   }
 
-  // ── Editing ──
+  // ── Filter + sort ──
+  const filtered = useMemo(() => {
+    let rows = [...payable]
+
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      rows = rows.filter(i =>
+        i.party.toLowerCase().includes(q) ||
+        (i.ref ?? '').toLowerCase().includes(q)
+      )
+    }
+    if (filterStatus !== 'all') rows = rows.filter(i => i.status === filterStatus)
+    if (dateFrom) rows = rows.filter(i => i.due && i.due >= dateFrom)
+    if (dateTo)   rows = rows.filter(i => i.due && i.due <= dateTo)
+
+    rows.sort((a, b) => {
+      let av: string | number = '', bv: string | number = ''
+      if (sortBy === 'party')  { av = a.party.toLowerCase(); bv = b.party.toLowerCase() }
+      if (sortBy === 'due')    { av = a.due ?? '9999'; bv = b.due ?? '9999' }
+      if (sortBy === 'amount') { av = Number(a.amount); bv = Number(b.amount) }
+      if (sortBy === 'status') { av = a.status; bv = b.status }
+      if (av < bv) return sortDir === 'asc' ? -1 : 1
+      if (av > bv) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+
+    return rows
+  }, [payable, search, filterStatus, dateFrom, dateTo, sortBy, sortDir])
+
+  function toggleSort(key: SortKey) {
+    if (sortBy === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortBy(key); setSortDir('asc') }
+  }
+  function SortIcon({ k }: { k: SortKey }) {
+    if (sortBy !== k) return null
+    return sortDir === 'asc' ? <ChevronUp size={10} className="inline ml-0.5" /> : <ChevronDown size={10} className="inline ml-0.5" />
+  }
+
+  // ── Totals (from filtered) ──
+  const totalDue  = filtered.reduce((t, i) => t + Number(i.amount), 0)
+  const totalPaid = filtered.filter(i => i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
+  const outstanding = totalDue - totalPaid
+
+  // ── Edit ──
   function startEdit(id: string, field: FieldKey, inv: Invoice) {
     if (!updateInvoice) return
     setEditing({ id, field })
@@ -105,7 +202,7 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
     try {
       const bankFields: BankField[] = ['bankName', 'sortCode', 'accNum', 'accName', 'iban', 'swift']
       if (bankFields.includes(field as BankField)) {
-        const bd: Partial<BankDetails> = inv.bank_details ?? {}
+        const bd: Partial<BankDetails> = resolveBankDetails(inv)
         const updated: BankDetails = {
           accName:  field === 'accName'  ? editVal : (bd.accName ?? ''),
           sortCode: field === 'sortCode' ? editVal : (bd.sortCode ?? ''),
@@ -115,6 +212,8 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
           swift:    field === 'swift'    ? editVal : bd.swift,
         }
         await updateInvoice(id, { bank_details: updated })
+        // Also update LS fallback
+        try { localStorage.setItem(`invoice_bank_${id}`, JSON.stringify(updated)) } catch { /* ignore */ }
       } else if (field === 'amount') {
         await updateInvoice(id, { amount: parseFloat(editVal) || inv.amount })
       } else if (field === 'due') {
@@ -133,33 +232,32 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
 
   // ── Selection ──
   function toggleAll() {
-    setSelected(s => s.size === payable.length ? new Set() : new Set(payable.map(i => i.id)))
+    setSelected(s => s.size === filtered.length ? new Set() : new Set(filtered.map(i => i.id)))
   }
   function toggleRow(id: string) {
     setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
 
-  // ── Totals ──
-  const totalDue = payable.reduce((t, i) => t + Number(i.amount), 0)
-  const totalPaid = payable.filter(i => i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
-  const outstanding = totalDue - totalPaid
-
   // ── Exports ──
-  function exportCSV() {
-    const header = ['Category', 'Supplier', 'Invoice Ref', 'Due Date', 'Amount', 'Currency', 'Status',
-      'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt']
-    const rows = payable.map(inv => {
-      const rec = getReceipt(inv)
+  function buildRows() {
+    return filtered.map(inv => {
+      const bd = resolveBankDetails(inv)
+      const rec = resolveReceipt(inv, costs, reconLinks)
       return [
-        getCategory(inv), inv.party, inv.ref ?? '', inv.due ?? '', inv.amount, inv.currency, inv.status,
-        inv.bank_details?.bankName ?? '', inv.bank_details?.sortCode ?? '', inv.bank_details?.accNum ?? '',
-        inv.bank_details?.accName ?? '', inv.bank_details?.iban ?? '', inv.bank_details?.swift ?? '',
+        getCategory(inv), inv.party, inv.ref ?? '', inv.due ?? '', Number(inv.amount), inv.currency, inv.status,
+        bd.bankName ?? '', bd.sortCode ?? '', bd.accNum ?? '', bd.accName ?? '', bd.iban ?? '', bd.swift ?? '',
         rec ? rec.url : '',
       ]
     })
-    rows.push(['', '', '', 'TOTAL DUE', totalDue, '', '', '', '', '', '', '', '', ''])
-    rows.push(['', '', '', 'TOTAL PAID', totalPaid, '', '', '', '', '', '', '', '', ''])
-    rows.push(['', '', '', 'OUTSTANDING', outstanding, '', '', '', '', '', '', '', '', ''])
+  }
+
+  function exportCSV() {
+    const header = ['Category', 'Supplier', 'Invoice Ref', 'Due Date', 'Amount', 'Currency', 'Status',
+      'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt URL']
+    const rows = buildRows()
+    rows.push(['', '', '', 'Total Due',    totalDue,    '', '', '', '', '', '', '', '', ''])
+    rows.push(['', '', '', 'Total Paid',   totalPaid,   '', '', '', '', '', '', '', '', ''])
+    rows.push(['', '', '', 'Outstanding',  outstanding, '', '', '', '', '', '', '', '', ''])
     const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -172,24 +270,13 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
     try {
       const XLSX = await import('xlsx')
       const header = ['Category', 'Supplier', 'Invoice Ref', 'Due Date', 'Amount', 'Currency', 'Status',
-        'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt']
-      const rows = payable.map(inv => {
-        const rec = getReceipt(inv)
-        return [
-          getCategory(inv), inv.party, inv.ref ?? '', inv.due ?? '', Number(inv.amount), inv.currency, inv.status,
-          inv.bank_details?.bankName ?? '', inv.bank_details?.sortCode ?? '', inv.bank_details?.accNum ?? '',
-          inv.bank_details?.accName ?? '', inv.bank_details?.iban ?? '', inv.bank_details?.swift ?? '',
-          rec ? rec.url : '',
-        ]
-      })
-      // Summary rows
-      rows.push(['', '', '', 'Total Due', totalDue, '', '', '', '', '', '', '', '', ''])
-      rows.push(['', '', '', 'Total Paid', totalPaid, '', '', '', '', '', '', '', '', ''])
+        'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt URL']
+      const rows = buildRows()
+      rows.push(['', '', '', 'Total Due',   totalDue,    '', '', '', '', '', '', '', '', ''])
+      rows.push(['', '', '', 'Total Paid',  totalPaid,   '', '', '', '', '', '', '', '', ''])
       rows.push(['', '', '', 'Outstanding', outstanding, '', '', '', '', '', '', '', '', ''])
-
       const ws = XLSX.utils.aoa_to_sheet([header, ...rows])
-      // Column widths
-      ws['!cols'] = [16, 20, 14, 12, 10, 6, 10, 16, 10, 12, 16, 22, 12, 30].map(w => ({ wch: w }))
+      ws['!cols'] = [16, 22, 14, 12, 10, 6, 10, 16, 10, 12, 16, 24, 12, 30].map(w => ({ wch: w }))
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, `${project.code} Payment Sheet`)
       XLSX.writeFile(wb, `${project.code}-payment-sheet.xlsx`)
@@ -199,18 +286,16 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
     }
   }
 
-  // ── Render cell ──
+  // ── Cell renderer ──
   function Cell({ inv, field, cls }: { inv: Invoice; field: FieldKey; cls?: string }) {
     const isEditing = editing?.id === inv.id && editing.field === field
     const val = rawVal(inv, field)
-    const canEdit = !!updateInvoice
     const isBankField = ['bankName', 'sortCode', 'accNum', 'accName', 'iban', 'swift'].includes(field)
 
     if (isEditing) {
       if (field === 'status') {
         return (
-          <select autoFocus value={editVal} onChange={e => setEditVal(e.target.value)}
-            onBlur={commitEdit}
+          <select autoFocus value={editVal} onChange={e => setEditVal(e.target.value)} onBlur={commitEdit}
             className="w-full border border-rule bg-white px-1 py-0.5 text-xs font-mono focus:outline-none">
             {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -218,8 +303,7 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
       }
       if (field === 'currency') {
         return (
-          <select autoFocus value={editVal} onChange={e => setEditVal(e.target.value)}
-            onBlur={commitEdit}
+          <select autoFocus value={editVal} onChange={e => setEditVal(e.target.value)} onBlur={commitEdit}
             className="w-full border border-rule bg-white px-1 py-0.5 text-xs font-mono focus:outline-none">
             {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
@@ -237,21 +321,20 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
       )
     }
 
-    const display = field === 'due' ? (val ? fmtDate(val) : '—')
-      : field === 'amount' ? fmt(Number(val), inv.currency)
-      : field === 'status' ? <span className={cn('badge', STATUS_BADGE[val] ?? 'badge-draft')}>{val}</span>
+    const display = field === 'due'    ? (val ? fmtDate(val) : <span className="text-muted/40">—</span>)
+      : field === 'amount'  ? fmt(Number(val), inv.currency)
+      : field === 'status'  ? <span className={cn('badge', STATUS_BADGE[val] ?? 'badge-draft')}>{val}</span>
       : (val || <span className="text-muted/30">—</span>)
 
     return (
       <div
-        onClick={() => startEdit(inv.id, field, inv)}
-        title={canEdit ? `Click to edit: ${val || 'empty'}` : val}
+        onClick={() => updateInvoice && startEdit(inv.id, field, inv)}
+        title={updateInvoice ? `Click to edit` : val}
         className={cn(
           'text-xs font-mono truncate min-w-0',
-          canEdit && 'cursor-text hover:bg-cream/80 rounded-sm px-0.5 -mx-0.5 transition-colors',
+          updateInvoice && 'cursor-text hover:bg-cream/80 rounded-sm px-0.5 -mx-0.5 transition-colors',
           saving === inv.id && 'opacity-40',
-          !val && 'italic',
-          isBankField && 'text-blue-700',
+          isBankField && val && 'text-blue-700',
           cls,
         )}
       >
@@ -260,22 +343,120 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
     )
   }
 
+  // ── Receipt cell ──
+  function ReceiptCell({ inv }: { inv: Invoice }) {
+    const rec = resolveReceipt(inv, costs, reconLinks)
+    if (!rec) return <span className="text-muted/30 font-mono text-[10px]">—</span>
+    if (rec.type === 'image') {
+      return (
+        <button onClick={() => setLightbox({ url: rec.url, name: inv.party, type: 'image' })}
+          className="block border border-rule overflow-hidden hover:opacity-80 transition-opacity"
+          title="View receipt">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={rec.url} alt="" className="w-8 h-8 object-cover" />
+        </button>
+      )
+    }
+    return (
+      <button onClick={() => setLightbox({ url: rec.url, name: inv.party, type: 'pdf' })}
+        className="flex items-center gap-1 font-mono text-[10px] text-muted hover:text-ink border border-rule px-1.5 py-1 transition-colors"
+        title="View receipt PDF">
+        <FileText size={10} /> PDF
+      </button>
+    )
+  }
+
+  const hasFilters = search || filterStatus !== 'all' || dateFrom || dateTo
+
   return (
-    <div className="space-y-4">
-      {/* Toolbar */}
+    <div className="space-y-3">
+
+      {/* ── Filter bar ── */}
+      <div className="bg-white border border-rule p-3 space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Search */}
+          <div className="relative flex-1 min-w-[160px]">
+            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search supplier or ref…"
+              className="w-full border border-rule bg-paper pl-6 pr-2 py-1.5 text-xs font-mono text-ink focus:outline-none focus:border-ink"
+            />
+          </div>
+
+          {/* Status filter */}
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+            className="border border-rule bg-paper px-2 py-1.5 text-xs font-mono text-ink focus:outline-none">
+            <option value="all">All statuses</option>
+            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+
+          {/* Date from */}
+          <div className="flex items-center gap-1">
+            <span className="font-mono text-[10px] text-muted uppercase tracking-wider whitespace-nowrap">Due from</span>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              className="border border-rule bg-paper px-2 py-1.5 text-xs font-mono text-ink focus:outline-none" />
+          </div>
+
+          {/* Date to */}
+          <div className="flex items-center gap-1">
+            <span className="font-mono text-[10px] text-muted uppercase tracking-wider">to</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              className="border border-rule bg-paper px-2 py-1.5 text-xs font-mono text-ink focus:outline-none" />
+          </div>
+
+          {/* Clear filters */}
+          {hasFilters && (
+            <button onClick={() => { setSearch(''); setFilterStatus('all'); setDateFrom(''); setDateTo('') }}
+              className="font-mono text-[10px] text-muted hover:text-red-500 transition-colors flex items-center gap-1">
+              <X size={9} /> Clear
+            </button>
+          )}
+        </div>
+
+        {/* Sort + count row */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Filter size={10} className="text-muted" />
+            <span className="font-mono text-[10px] text-muted uppercase tracking-wider">Sort</span>
+            <div className="flex gap-1">
+              {([
+                { key: 'party' as SortKey, label: 'Supplier' },
+                { key: 'due' as SortKey,   label: 'Due Date' },
+                { key: 'amount' as SortKey, label: 'Amount' },
+                { key: 'status' as SortKey, label: 'Status' },
+              ]).map(({ key, label }) => (
+                <button key={key} onClick={() => toggleSort(key)}
+                  className={cn(
+                    'font-mono text-[10px] px-2 py-0.5 border transition-colors flex items-center',
+                    sortBy === key ? 'border-ink bg-ink text-white' : 'border-rule text-muted hover:text-ink'
+                  )}>
+                  {label}<SortIcon k={key} />
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex-1" />
+          <span className="font-mono text-[10px] text-muted">
+            {filtered.length === payable.length
+              ? `${payable.length} payable invoice${payable.length !== 1 ? 's' : ''}`
+              : `${filtered.length} of ${payable.length} invoices`}
+            {updateInvoice && ' · Click any cell to edit'}
+          </span>
+        </div>
+      </div>
+
+      {/* ── Toolbar ── */}
       <div className="flex items-center gap-3 flex-wrap">
-        <p className="font-mono text-xs text-muted">
-          {payable.length} payable invoice{payable.length !== 1 ? 's' : ''}
-          {updateInvoice && ' · Click any cell to edit'}
-        </p>
-        <div className="flex-1" />
         {onAddToRun && selected.size > 0 && (
           <button
-            onClick={() => { onAddToRun(payable.filter(i => selected.has(i.id))); setSelected(new Set()) }}
+            onClick={() => { onAddToRun(filtered.filter(i => selected.has(i.id))); setSelected(new Set()) }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:opacity-90 transition-opacity">
             <CheckCircle size={11} /> Add {selected.size} to Payment Run
           </button>
         )}
+        <div className="flex-1" />
         <button onClick={exportCSV}
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink transition-colors">
           <Download size={11} /> CSV
@@ -291,6 +472,12 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
           <p className="font-mono text-xs text-muted uppercase tracking-wider">No payable invoices for this project</p>
           <p className="font-mono text-[10px] text-muted mt-2">Use the Costs tab to create payable invoices from cost items</p>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="tbl-card py-12 text-center">
+          <p className="font-mono text-xs text-muted uppercase tracking-wider">No invoices match the current filters</p>
+          <button onClick={() => { setSearch(''); setFilterStatus('all'); setDateFrom(''); setDateTo('') }}
+            className="mt-2 font-mono text-xs text-ink underline underline-offset-2">Clear filters</button>
+        </div>
       ) : (
         <div className="tbl-card">
           <div className="overflow-x-auto">
@@ -298,77 +485,70 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
               <thead>
                 <tr className="border-b-2 border-ink bg-paper/50">
                   {onAddToRun && (
-                    <th className="px-2 py-2.5 w-8 flex-shrink-0">
-                      <input type="checkbox" checked={selected.size === payable.length && payable.length > 0}
+                    <th className="px-2 py-2.5 w-8">
+                      <input type="checkbox"
+                        checked={selected.size === filtered.length && filtered.length > 0}
                         onChange={toggleAll} className="accent-ink" />
                     </th>
                   )}
                   <th className="tbl-lbl text-left px-2 py-2.5 w-20">Category</th>
                   {INV_COLS.map(c => (
-                    <th key={c.key} className={cn('tbl-lbl text-left px-2 py-2.5', c.cls)}>{c.label}</th>
+                    <th key={c.key}
+                      onClick={() => ['party', 'due', 'amount', 'status'].includes(c.key) ? toggleSort(c.key as SortKey) : undefined}
+                      className={cn(
+                        'tbl-lbl text-left px-2 py-2.5 select-none',
+                        c.cls,
+                        ['party', 'due', 'amount', 'status'].includes(c.key) && 'cursor-pointer hover:text-ink transition-colors'
+                      )}>
+                      {c.label}
+                      {['party', 'due', 'amount', 'status'].includes(c.key) && <SortIcon k={c.key as SortKey} />}
+                    </th>
                   ))}
-                  <th className="tbl-lbl text-left px-2 py-2.5 bg-blue-50/60" colSpan={6}>
+                  {/* Bank details spanning header */}
+                  <th className="tbl-lbl text-center px-2 py-2.5 bg-blue-50/60 text-blue-600" colSpan={6}>
                     Bank Details
                   </th>
-                  <th className="tbl-lbl text-left px-2 py-2.5 w-14">Receipt</th>
+                  <th className="tbl-lbl text-left px-2 py-2.5 w-16">Receipt</th>
                 </tr>
-                {/* Bank detail sub-headers */}
-                <tr className="border-b border-rule bg-blue-50/30">
-                  {onAddToRun && <th className="px-2 py-1" />}
-                  <th className="px-2 py-1" />
-                  {INV_COLS.map(c => <th key={c.key} className="px-2 py-1" />)}
+                {/* Bank sub-headers */}
+                <tr className="border-b border-rule bg-blue-50/20">
+                  {onAddToRun && <th />}
+                  <th />{INV_COLS.map(c => <th key={c.key} />)}
                   {BANK_COLS.map(c => (
-                    <th key={c.key} className={cn('tbl-lbl text-left px-2 py-1 bg-blue-50/40 text-blue-600', c.cls)}>
+                    <th key={c.key} className={cn('tbl-lbl text-left px-2 py-1 text-blue-600/80', c.cls)}>
                       {c.label}
                     </th>
                   ))}
-                  <th className="px-2 py-1" />
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {payable.map((inv, idx) => {
-                  const receipt = getReceipt(inv)
-                  return (
-                    <tr key={inv.id}
-                      className={cn('border-b border-rule last:border-0 group', idx % 2 === 1 && 'bg-paper/30')}>
-                      {onAddToRun && (
-                        <td className="px-2 py-2">
-                          <input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleRow(inv.id)} className="accent-ink" />
-                        </td>
-                      )}
+                {filtered.map((inv, idx) => (
+                  <tr key={inv.id}
+                    className={cn('border-b border-rule last:border-0 group', idx % 2 === 1 && 'bg-paper/30')}>
+                    {onAddToRun && (
                       <td className="px-2 py-2">
-                        <span className="font-mono text-[9px] text-muted uppercase tracking-wider">{getCategory(inv)}</span>
+                        <input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggleRow(inv.id)} className="accent-ink" />
                       </td>
-                      {INV_COLS.map(c => (
-                        <td key={c.key} className={cn('px-2 py-2', c.cls.includes('right') ? 'text-right' : '')}>
-                          <Cell inv={inv} field={c.key} />
-                        </td>
-                      ))}
-                      {BANK_COLS.map(c => (
-                        <td key={c.key} className="px-2 py-2 bg-blue-50/20">
-                          <Cell inv={inv} field={c.key} />
-                        </td>
-                      ))}
-                      <td className="px-2 py-2">
-                        {receipt ? (
-                          receipt.type === 'image' ? (
-                            <button onClick={() => setLightbox({ url: receipt.url, name: inv.party })}
-                              className="text-ac-green hover:text-[#2d6147] transition-colors" title="View receipt">
-                              <Eye size={13} />
-                            </button>
-                          ) : (
-                            <a href={receipt.url} target="_blank" rel="noopener noreferrer"
-                              className="text-ac-green hover:text-[#2d6147] transition-colors" title="View receipt PDF">
-                              <ExternalLink size={13} />
-                            </a>
-                          )
-                        ) : (
-                          <span className="text-muted/30 font-mono text-[10px]">—</span>
-                        )}
+                    )}
+                    <td className="px-2 py-2">
+                      <span className="font-mono text-[9px] text-muted uppercase tracking-wider">{getCategory(inv)}</span>
+                    </td>
+                    {INV_COLS.map(c => (
+                      <td key={c.key} className="px-2 py-2">
+                        <Cell inv={inv} field={c.key} />
                       </td>
-                    </tr>
-                  )
-                })}
+                    ))}
+                    {BANK_COLS.map(c => (
+                      <td key={c.key} className="px-2 py-2 bg-blue-50/10">
+                        <Cell inv={inv} field={c.key} />
+                      </td>
+                    ))}
+                    <td className="px-2 py-1.5">
+                      <ReceiptCell inv={inv} />
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -376,31 +556,46 @@ export function PaymentSheet({ invoices, project, costs, reconLinks, updateInvoi
           {/* Totals bar */}
           <div className="border-t-2 border-ink bg-cream px-4 py-3 flex flex-wrap gap-8">
             {[
-              { label: 'Total Due',    val: totalDue,    cls: '' },
-              { label: 'Total Paid',   val: totalPaid,   cls: 'text-ac-green' },
-              { label: 'Outstanding',  val: outstanding, cls: outstanding > 0 ? 'text-red-600' : 'text-ac-green' },
+              { label: 'Total Due',   val: totalDue,    cls: '' },
+              { label: 'Total Paid',  val: totalPaid,   cls: 'text-ac-green' },
+              { label: 'Outstanding', val: outstanding, cls: outstanding > 0 ? 'text-red-600' : 'text-ac-green' },
             ].map(({ label, val, cls }) => (
               <div key={label}>
                 <p className="font-mono text-[9px] uppercase tracking-widest text-muted">{label}</p>
                 <p className={cn('font-mono text-base font-bold mt-0.5', cls || 'text-ink')}>{fmt(val)}</p>
               </div>
             ))}
+            {hasFilters && (
+              <div className="ml-auto self-center">
+                <p className="font-mono text-[9px] text-muted">Filtered: {filtered.length} of {payable.length}</p>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Lightbox */}
+      {/* ── Lightbox ── */}
       {lightbox && (
         <div className="fixed inset-0 z-[70] flex flex-col bg-black/90" onClick={() => setLightbox(null)}>
           <div className="flex items-center justify-between px-6 py-3 flex-shrink-0" onClick={e => e.stopPropagation()}>
             <span className="font-mono text-xs text-white/60">{lightbox.name}</span>
-            <button onClick={() => setLightbox(null)} className="text-white/60 hover:text-white transition-colors">
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-4">
+              <a href={lightbox.url} target="_blank" rel="noopener noreferrer"
+                className="text-white/60 hover:text-white transition-colors" title="Open in new tab">
+                <ExternalLink size={14} />
+              </a>
+              <button onClick={() => setLightbox(null)} className="text-white/60 hover:text-white transition-colors">
+                <X size={16} />
+              </button>
+            </div>
           </div>
-          <div className="flex-1 flex items-center justify-center p-6" onClick={e => e.stopPropagation()}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={lightbox.url} alt={lightbox.name} className="max-w-full max-h-full object-contain" />
+          <div className="flex-1 p-4" onClick={e => e.stopPropagation()}>
+            {lightbox.type === 'image' ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={lightbox.url} alt={lightbox.name} className="max-w-full max-h-full object-contain mx-auto block" style={{ maxHeight: 'calc(100vh - 80px)' }} />
+            ) : (
+              <iframe src={lightbox.url} className="w-full h-full border-0 bg-white" style={{ minHeight: 'calc(100vh - 80px)' }} title={lightbox.name} />
+            )}
           </div>
         </div>
       )}
