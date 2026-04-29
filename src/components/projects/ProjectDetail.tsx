@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { PaymentSheet } from './PaymentSheet'
 import { ProjectImport } from './ProjectImport'
+import { ProjectInvoicesTab } from './ProjectInvoicesTab'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
@@ -1327,97 +1328,15 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
         {/* ── Invoices ── */}
         {tab === 'invoices' && (
-          <div className="p-6">
-            {projInvoices.length === 0 ? (
-              <p className="font-mono text-xs text-muted text-center py-16 uppercase tracking-wider">No invoices for this project</p>
-            ) : (
-              <div className="tbl-card">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-rule bg-paper/50">
-                      {['Ref', 'Party', 'Type', 'Due', 'Amount', 'Status', ''].map(h => (
-                        <th key={h} className="tbl-lbl text-left px-4 py-2.5">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projInvoices.map((inv, i) => (
-                      <tr key={inv.id} className={cn('border-b border-rule last:border-0 group', i % 2 === 1 && 'bg-paper/40')}>
-                        <td className="px-4 py-2.5 font-mono text-xs">{inv.ref || '—'}</td>
-                        <td className="px-4 py-2.5 text-sm">{inv.party}</td>
-                        <td className="px-4 py-2.5 font-mono text-[10px] uppercase tracking-wider text-muted">{inv.type}</td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-muted">{inv.due ? fmtDate(inv.due) : '—'}</td>
-                        <td className="px-4 py-2.5 font-mono text-sm font-semibold">{fmt(inv.amount, inv.currency)}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={cn('badge', {
-                            paid: 'badge-paid', pending: 'badge-pending', overdue: 'badge-overdue',
-                            draft: 'badge-draft', submitted: 'badge-submitted', approved: 'badge-approved',
-                            sent: 'badge-sent', 'part-paid': 'badge-part-paid',
-                          }[inv.status] ?? 'badge-draft')}>{inv.status}</span>
-                        </td>
-                        <td className="px-4 py-2">
-                          <div className="row-actions justify-end gap-1">
-                            {(() => {
-                              // View Receipt — shows if cost linked to this invoice has a receipt
-                              const link = reconLinks.manual.find(m => m.invoiceId === inv.id)
-                              const linkedCost = link ? costs.find(c => c.id === link.costId) : null
-                              if (!linkedCost?.receiptUrl) return null
-                              return linkedCost.receiptType === 'image' ? (
-                                <button onClick={() => setLightboxUrl({ url: linkedCost.receiptUrl!, name: linkedCost.description })}
-                                  title="View cost receipt"
-                                  className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-rule">
-                                  <ImageIcon size={10} /> Receipt
-                                </button>
-                              ) : (
-                                <a href={linkedCost.receiptUrl} target="_blank" rel="noopener noreferrer"
-                                  title="View cost receipt PDF"
-                                  className="flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-rule">
-                                  <FileText size={10} /> Receipt
-                                </a>
-                              )
-                            })()}
-                            <button onClick={() => setPreviewInvoice(inv)} title="Preview PDF"
-                              className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100">
-                              <Eye size={12} />
-                            </button>
-                            {updateInvoice && (
-                              <button onClick={() => setEditingInvoice(inv)} title="Edit"
-                                className="p-1 text-muted hover:text-ink transition-colors opacity-0 group-hover:opacity-100">
-                                <Pencil size={12} />
-                              </button>
-                            )}
-                            {markInvoicePaid && inv.status !== 'paid' && (
-                              <button onClick={() => markInvoicePaid(inv.id)} title="Mark paid"
-                                className="p-1 text-muted hover:text-ac-green transition-colors opacity-0 group-hover:opacity-100">
-                                <CheckCircle size={12} />
-                              </button>
-                            )}
-                            <button onClick={() => addCostFromInvoice(inv)} title="Add to costs"
-                              className="font-mono text-[10px] px-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 whitespace-nowrap">
-                              → Cost
-                            </button>
-                            {updateInvoice && (
-                              <button onClick={async () => {
-                                await updateInvoice(inv.id, { project_code: null, project_name: null })
-                                toast('Unlinked from project')
-                              }} title="Unlink from project"
-                                className="p-1 text-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
-                                <Link2Off size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="px-4 py-2.5 border-t border-rule bg-cream flex justify-between">
-                  <span className="font-mono text-xs text-muted">Receivable: {fmt(totalBillable)}</span>
-                  <span className="font-mono text-xs text-muted">Payable: {fmt(totalOutgoings)}</span>
-                </div>
-              </div>
-            )}
-          </div>
+          <ProjectInvoicesTab
+            invoices={projInvoices}
+            project={project}
+            updateInvoice={updateInvoice}
+            createInvoice={createInvoice}
+            markInvoicePaid={markInvoicePaid}
+            onPreview={inv => setPreviewInvoice(inv)}
+            onEdit={inv => setEditingInvoice(inv)}
+          />
         )}
 
         {/* ── Expenses ── */}
