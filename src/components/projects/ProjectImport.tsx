@@ -20,6 +20,58 @@ const INV_STATS: InvoiceStatus[] = ['draft', 'pending', 'submitted', 'approved',
 const PROJ_STATS: ProjectStatus[] = ['active', 'completed', 'on-hold']
 const MAX_TEXT_CHARS = 25000
 
+const SYSTEM_PROMPT = `You are extracting project data from a document. Extract all of:
+- Project name and a suggested code (format like "AC-001" or "RTW-2025-01")
+- Budget or total contract value as a number
+- Entity: only one of "Actually Creative", "419Studios", or "RTW Records" if mentioned; otherwise "Actually Creative"
+- Start date in YYYY-MM-DD format
+- All cost line items (description, category from: Equipment/Travel/Crew/Talent/Venue/Software/Marketing/Other, estimated amount as a number, actual amount as a number, due date as YYYY-MM-DD or null, status: planned/confirmed/paid, supplier or employee name if applicable)
+- All invoice records (supplier/client name, invoice reference number, amount as a number, currency symbol £ $ or €, due date as YYYY-MM-DD or null, type: "payable" if you owe money / "receivable" if they owe you, status: draft/pending/submitted/approved/sent/paid/overdue/part-paid, bank details like sort code/account number/IBAN/SWIFT if present)
+- Any employees or team members mentioned
+
+Return ONLY valid JSON with exactly this structure, no other text or explanation:
+{
+  "project": {
+    "name": "...",
+    "code": "...",
+    "budget": 0,
+    "entity": "Actually Creative",
+    "date": "YYYY-MM-DD",
+    "notes": "..."
+  },
+  "costs": [
+    {
+      "description": "...",
+      "category": "Other",
+      "estimated": 0,
+      "actual": 0,
+      "status": "planned",
+      "notes": "",
+      "dueDate": null,
+      "employeeName": null
+    }
+  ],
+  "invoices": [
+    {
+      "party": "...",
+      "ref": "...",
+      "amount": 0,
+      "currency": "£",
+      "due": null,
+      "type": "payable",
+      "status": "pending",
+      "notes": "",
+      "bankName": null,
+      "sortCode": null,
+      "accNum": null,
+      "accName": null,
+      "iban": null,
+      "swift": null
+    }
+  ],
+  "uncertain": ["describe anything you could not clearly extract or are unsure about"]
+}`
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Step = 'drop' | 'extracting' | 'preview' | 'saving' | 'success'
@@ -142,10 +194,10 @@ export function ProjectImport({
     setStep('extracting')
 
     try {
-      let body: Record<string, unknown>
+      // Build Anthropic message content client-side
+      let msgContent: unknown[]
 
       if (file.name.match(/\.(xlsx|xls|csv)$/i)) {
-        // Parse spreadsheet with SheetJS
         const XLSX = await import('xlsx')
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf, { type: 'array' })
@@ -159,7 +211,7 @@ export function ProjectImport({
         if (content.length > MAX_TEXT_CHARS) {
           content = content.slice(0, MAX_TEXT_CHARS) + '\n\n[Content truncated — file too large]'
         }
-        body = { apiKey, content }
+        msgContent = [{ type: 'text', text: `Extract the project data from this content and return the JSON.\n\n${content}` }]
       } else {
         // PDF — base64 encode
         const buf = await file.arrayBuffer()
@@ -169,31 +221,53 @@ export function ProjectImport({
         for (let i = 0; i < bytes.length; i += chunk) {
           binary += String.fromCharCode(...Array.from(bytes.slice(i, i + chunk)))
         }
-        body = { apiKey, base64: btoa(binary), mediaType: file.type || 'application/pdf' }
+        const base64 = btoa(binary)
+        const mediaType = file.type || 'application/pdf'
+        const isPDF = mediaType === 'application/pdf'
+        const fileBlock = isPDF
+          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+          : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }
+        msgContent = [fileBlock, { type: 'text', text: 'Extract the project data from this document and return the JSON.' }]
       }
 
-      const res = await fetch('/api/import-project', {
+      const isPDF = (file.type || 'application/pdf') === 'application/pdf' && !file.name.match(/\.(xlsx|xls|csv)$/i)
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      }
+      if (isPDF) headers['anthropic-beta'] = 'pdfs-2024-09-25'
+
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        headers,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 4096,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: msgContent }],
+        }),
       })
 
-      let data: { extracted?: Record<string, unknown>; error?: string } = {}
-      try {
-        data = await res.json() as typeof data
-      } catch {
-        const text = await res.text().catch(() => '')
-        throw new Error(`Server returned non-JSON response (status ${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`)
+      if (!res.ok) {
+        let errMsg: string
+        try {
+          const errJson = await res.json() as { error?: { message?: string } }
+          errMsg = errJson?.error?.message ?? JSON.stringify(errJson)
+        } catch {
+          errMsg = await res.text().catch(() => `HTTP ${res.status}`)
+        }
+        throw new Error(`Anthropic API error: ${errMsg}`)
       }
 
-      if (!res.ok || data.error) {
-        setError(data.error ?? 'AI extraction failed. You can fill in the data manually below.')
-        setStep('preview')
-        return
-      }
+      const aiData = await res.json() as { content: Array<{ type: string; text: string }> }
+      const text = aiData.content.find(b => b.type === 'text')?.text ?? ''
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) throw new Error('Could not parse AI response — no JSON found')
 
-      // Apply whatever was extracted (even partial)
-      applyExtracted(data.extracted ?? {})
+      const extracted = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+      applyExtracted(extracted)
       setStep('preview')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
