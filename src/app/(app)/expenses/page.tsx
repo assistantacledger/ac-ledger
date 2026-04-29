@@ -12,9 +12,9 @@ import { toast } from '@/lib/toast'
 import {
   Plus, Search, CheckCircle, DollarSign, Pencil, Trash2,
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
-  Eye, X,
+  Eye, X, Download, Printer,
 } from 'lucide-react'
-import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails } from '@/types'
+import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails, EmployeeProfile } from '@/types'
 import { ENTITIES } from '@/types'
 
 const STATUS_BADGE: Record<ExpenseStatus, string> = {
@@ -49,6 +49,144 @@ export default function ExpensesPage() {
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
+  }
+
+  function exportProfileCSV(name: string, exps: Expense[]) {
+    const headers = ['Date', 'Project Code', 'Project Name', 'Description', 'Category', 'Amount', 'Status', 'Receipt URL']
+    const rows = exps.flatMap(exp => {
+      const items = exp.line_items?.length ? exp.line_items : [{ description: exp.notes ?? '', category: '', amount: exp.total }]
+      return items.map(li => [
+        exp.date,
+        exp.project_code ?? '',
+        exp.project_name ?? '',
+        li.description ?? '',
+        (li as { category?: string }).category ?? '',
+        String(li.amount ?? exp.total),
+        exp.status,
+        (exp.receipt_urls ?? []).join(' | '),
+      ])
+    })
+    const csv = [headers.map(h => `"${h}"`).join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `${name.replace(/\s+/g, '-').toLowerCase()}-expenses.csv`; a.click()
+    URL.revokeObjectURL(url)
+    toast('CSV downloaded')
+  }
+
+  function exportProfileInvoicePDF(name: string, exps: Expense[], profile: EmployeeProfile | undefined) {
+    const byProject = new Map<string, Expense[]>()
+    for (const exp of exps) {
+      const key = exp.project_code || '—'
+      if (!byProject.has(key)) byProject.set(key, [])
+      byProject.get(key)!.push(exp)
+    }
+    const grandTotal = exps.reduce((s, e) => s + Number(e.total), 0)
+    const statuses = Array.from(new Set(exps.map(e => e.status)))
+    const statusDisplay = statuses.includes('paid') && statuses.length === 1 ? 'PAID'
+      : statuses.includes('approved') ? 'APPROVED'
+      : 'SUBMITTED'
+    const entity = exps[0]?.entity ?? 'Actually Creative'
+
+    const projectRows = Array.from(byProject.entries()).map(([proj, projExps]) => {
+      const projTotal = projExps.reduce((s, e) => s + Number(e.total), 0)
+      const lineRows = projExps.flatMap(exp =>
+        (exp.line_items?.length ? exp.line_items : [{ description: exp.notes ?? '—', category: '', amount: exp.total }]).map(li => ({
+          date: exp.date,
+          project: proj,
+          description: li.description ?? '',
+          category: (li as { category?: string }).category ?? '',
+          amount: Number(li.amount ?? exp.total),
+          receipts: (exp.receipt_urls ?? []),
+        }))
+      )
+      return { proj, projTotal, lineRows }
+    })
+
+    const html = `<!DOCTYPE html><html><head><title>Expense Invoice — ${name}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:11px;color:#1a1a1a;background:#fff}
+.page{max-width:794px;margin:0 auto;padding:48px}
+.header-bar{background:#1a1a1a;color:#fff;padding:20px 24px;margin-bottom:32px;display:flex;justify-content:space-between;align-items:flex-start}
+.header-bar h1{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.header-bar .ref{font-family:monospace;font-size:10px;opacity:.6;margin-top:4px}
+.parties{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-bottom:28px}
+.party-block .label{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#9a9a9a;margin-bottom:6px;border-bottom:1px solid #e2e2e0;padding-bottom:3px}
+.party-block p{font-size:11px;line-height:1.6;color:#1a1a1a}
+.party-block .name{font-weight:700;font-size:12px}
+table{width:100%;border-collapse:collapse;margin-bottom:20px}
+th{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#9a9a9a;border-bottom:1px solid #e2e2e0;padding:6px 8px;text-align:left}
+td{padding:6px 8px;border-bottom:1px solid #f0f0ee;font-size:10px;vertical-align:top}
+td.amount{text-align:right;font-family:monospace;font-weight:600}
+.proj-header td{background:#f8f8f6;font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#9a9a9a;padding:4px 8px;border-bottom:1px solid #e2e2e0}
+.proj-subtotal td{border-top:1px solid #e2e2e0;font-size:10px;font-weight:600;color:#1a1a1a;padding:5px 8px}
+.grand-total-row td{border-top:3px solid #1a1a1a;font-size:13px;font-weight:700;padding:8px 8px}
+.payment-section{margin-top:28px;padding-top:20px;border-top:2px solid #1a1a1a}
+.payment-section .label{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#9a9a9a;margin-bottom:8px}
+.payment-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.payment-item dt{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#9a9a9a;margin-bottom:2px}
+.payment-item dd{font-family:monospace;font-size:10px;color:#1a1a1a}
+.status-badge{display:inline-block;font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border:1px solid #1a1a1a;padding:2px 8px;margin-top:6px}
+.footer{margin-top:40px;font-family:monospace;font-size:9px;color:#9a9a9a;text-align:right}
+a{color:#1a1a1a;text-decoration:underline;font-size:9px}
+@media print{@page{size:A4;margin:1.5cm}body{font-size:10px}.page{padding:0;max-width:none}}
+</style></head><body><div class="page">
+<div class="header-bar">
+  <div>
+    <h1>Expense Reimbursement</h1>
+    <div class="ref">Generated ${new Date().toLocaleDateString('en-GB')}</div>
+  </div>
+  <div style="text-align:right"><span class="status-badge">${statusDisplay}</span></div>
+</div>
+<div class="parties">
+  <div class="party-block">
+    <div class="label">From</div>
+    <p class="name">${name}</p>
+    ${profile?.invCompany ? `<p>${profile.invCompany}</p>` : ''}
+    ${profile?.invAddr ? `<p style="white-space:pre-line">${profile.invAddr}</p>` : ''}
+  </div>
+  <div class="party-block">
+    <div class="label">Billed To</div>
+    <p class="name">${entity}</p>
+  </div>
+</div>
+<table>
+  <thead><tr><th>Date</th><th>Project</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th><th>Receipts</th></tr></thead>
+  <tbody>
+  ${projectRows.map(({ proj, projTotal, lineRows }) => `
+    <tr class="proj-header"><td colspan="6">${proj}</td></tr>
+    ${lineRows.map(r => `<tr>
+      <td style="font-family:monospace;white-space:nowrap">${fmtDate(r.date)}</td>
+      <td style="font-family:monospace">${r.project}</td>
+      <td>${r.description}</td>
+      <td style="font-family:monospace;color:#9a9a9a">${r.category}</td>
+      <td class="amount">${fmt(r.amount)}</td>
+      <td>${r.receipts.map((u, i) => `<a href="${u}" target="_blank">Receipt ${i + 1}</a>`).join(' ')}</td>
+    </tr>`).join('')}
+    <tr class="proj-subtotal"><td colspan="4">Subtotal — ${proj}</td><td class="amount">${fmt(projTotal)}</td><td></td></tr>
+  `).join('')}
+  <tr class="grand-total-row"><td colspan="4">Grand Total</td><td class="amount">${fmt(grandTotal)}</td><td></td></tr>
+  </tbody>
+</table>
+${profile ? `<div class="payment-section">
+  <div class="label">Payment Details</div>
+  <div class="payment-grid">
+    ${[
+      { label: 'Account Name', val: profile.accName },
+      { label: 'Bank', val: profile.bankName },
+      { label: 'Sort Code', val: profile.sortCode },
+      { label: 'Account Number', val: profile.accNum },
+      { label: 'IBAN', val: profile.iban },
+      { label: 'SWIFT / BIC', val: profile.swift },
+    ].filter(f => f.val).map(f => `<div class="payment-item"><dt>${f.label}</dt><dd>${f.val}</dd></div>`).join('')}
+  </div>
+</div>` : ''}
+<div class="footer">AC Ledger · ${new Date().toLocaleDateString('en-GB')}</div>
+</div></body></html>`
+
+    const win = window.open('', '_blank')
+    if (win) { win.document.write(html); win.document.close(); win.print() }
   }
 
   function SortIcon({ k }: { k: SortKey }) {
@@ -281,13 +419,29 @@ export default function ExpensesPage() {
                           <p className="font-mono text-sm font-semibold text-ac-green">{fmt(group.paid)}</p>
                         </div>
                       </div>
-                      {/* New expense for this profile */}
-                      <button
-                        onClick={e => { e.stopPropagation(); openNewForProfile(group.name) }}
-                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-all"
-                      >
-                        <Plus size={10} /> New
-                      </button>
+                      {/* Profile actions */}
+                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => exportProfileInvoicePDF(group.name, group.exps, profiles.find(p => p.name.toLowerCase() === group.name.toLowerCase()))}
+                          title="Export reimbursement invoice PDF"
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                        >
+                          <Printer size={10} /> Invoice
+                        </button>
+                        <button
+                          onClick={() => exportProfileCSV(group.name, group.exps)}
+                          title="Export CSV"
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                        >
+                          <Download size={10} /> CSV
+                        </button>
+                        <button
+                          onClick={() => openNewForProfile(group.name)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                        >
+                          <Plus size={10} /> New
+                        </button>
+                      </div>
                     </div>
 
                     {/* Expanded: expenses grouped by project */}

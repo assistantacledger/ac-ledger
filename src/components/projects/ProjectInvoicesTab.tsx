@@ -10,6 +10,7 @@ import {
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
+import { FilePreviewOverlay } from '@/components/ui/FilePreviewOverlay'
 import type { Invoice, InvoiceStatus, InvoiceUpdate, InvoiceInsert, Project } from '@/types'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -120,6 +121,7 @@ export function ProjectInvoicesTab({
   // ── Export ──
   const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null)
   const [exportDropOpen, setExportDropOpen] = useState(false)
+  const [filePreview, setFilePreview] = useState<{ url: string; name: string } | null>(null)
 
   const editInputRef = useRef<HTMLInputElement | HTMLSelectElement>(null)
 
@@ -593,6 +595,13 @@ ${outstanding.map(inv => {
         {/* Actions */}
         <td className="px-2 py-2">
           <div className="row-actions justify-end gap-0.5">
+            {inv.pdf_url && (
+              <button onClick={() => setFilePreview({ url: inv.pdf_url!, name: `${inv.party} ${inv.ref ?? ''}`.trim() })}
+                title="View receipt / PDF"
+                className="p-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-all">
+                <FileText size={12} />
+              </button>
+            )}
             {onPreview && (
               <button onClick={() => onPreview(inv)} title="Preview"
                 className="p-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-all">
@@ -1085,6 +1094,11 @@ ${outstanding.map(inv => {
 
       {/* Close export dropdown on outside click */}
       {exportDropOpen && <div className="fixed inset-0 z-10" onClick={() => setExportDropOpen(false)} />}
+
+      {/* File preview overlay */}
+      {filePreview && (
+        <FilePreviewOverlay url={filePreview.url} name={filePreview.name} onClose={() => setFilePreview(null)} />
+      )}
     </div>
   )
 }

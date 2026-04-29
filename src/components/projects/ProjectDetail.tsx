@@ -11,6 +11,7 @@ import {
 import { PaymentSheet } from './PaymentSheet'
 import { ProjectImport } from './ProjectImport'
 import { ProjectInvoicesTab } from './ProjectInvoicesTab'
+import { FilePreviewOverlay } from '@/components/ui/FilePreviewOverlay'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
@@ -1211,10 +1212,16 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       <div key={`${costId}-${invoiceId}`} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0 bg-green-50/30">
                         <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
                           <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <p className="text-xs text-ink truncate">{cost.description}</p>
                             <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
                           </div>
+                          {cost.receiptUrl && (
+                            <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
+                              title="View receipt" className="text-muted hover:text-ink transition-colors flex-shrink-0">
+                              {cost.receiptType === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
+                            </button>
+                          )}
                         </div>
                         <div className="flex items-center justify-center">
                           <button onClick={e => { e.stopPropagation(); removeLink(costId, invoiceId, isManual) }}
@@ -1223,10 +1230,16 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           </button>
                         </div>
                         <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <p className="text-xs text-ink truncate">{inv.party}</p>
                             <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount, inv.currency)}</p>
                           </div>
+                          {inv.pdf_url && (
+                            <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: inv.pdf_url!, name: `${inv.party} ${inv.ref ?? ''}`.trim() }) }}
+                              title="View invoice PDF" className="text-muted hover:text-ink transition-colors flex-shrink-0">
+                              <FileText size={11} />
+                            </button>
+                          )}
                           {isManual && <span className="font-mono text-[9px] text-ac-green flex-shrink-0">manual</span>}
                         </div>
                       </div>
@@ -1238,10 +1251,16 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                     <div key={cost.id} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0">
                       <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
                         <div className="w-2 h-2 rounded-full bg-ac-amber flex-shrink-0" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="text-xs text-ink truncate">{cost.description}</p>
                           <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
                         </div>
+                        {cost.receiptUrl && (
+                          <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
+                            title="View receipt" className="text-muted hover:text-ink transition-colors flex-shrink-0">
+                            {cost.receiptType === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
+                          </button>
+                        )}
                       </div>
                       <div className="flex items-center justify-center">
                         <button onClick={e => { e.stopPropagation(); setLinkingFrom(f => f?.id === cost.id ? null : { side: 'cost', id: cost.id }) }}
@@ -1299,10 +1318,16 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       </div>
                       <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
                         <div className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="text-xs text-ink truncate">{inv.party}</p>
                           <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount, inv.currency)}</p>
                         </div>
+                        {inv.pdf_url && (
+                          <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: inv.pdf_url!, name: `${inv.party} ${inv.ref ?? ''}`.trim() }) }}
+                            title="View invoice PDF" className="text-muted hover:text-ink transition-colors flex-shrink-0">
+                            <FileText size={11} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1645,13 +1670,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       <div className="w-3 h-3 border border-rule border-t-muted animate-spin" />
                                     ) : cost.receiptUrl ? (
                                       <button
-                                        onClick={() => {
-                                          if (cost.receiptType === 'image') {
-                                            setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })
-                                          } else {
-                                            window.open(cost.receiptUrl, '_blank')
-                                          }
-                                        }}
+                                        onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })}
                                         title="View receipt"
                                         className="text-ac-green hover:text-[#2d6147] transition-colors"
                                       >
@@ -1746,10 +1765,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                               className="h-8 w-8 object-cover border border-rule cursor-pointer hover:opacity-80 transition-opacity"
                                               onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })} />
                                           ) : (
-                                            <a href={cost.receiptUrl} target="_blank" rel="noopener noreferrer"
+                                            <button onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })}
                                               className="flex items-center gap-1 text-muted hover:text-ink text-xs font-mono">
                                               <FileText size={12} /> PDF
-                                            </a>
+                                            </button>
                                           )}
                                           <button onClick={() => removeCostReceipt(cost.id)}
                                             className="font-mono text-[10px] text-red-400 hover:text-red-600 transition-colors">
@@ -2391,9 +2410,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         )}
       </div>
 
-      {/* Image lightbox */}
+      {/* File preview overlay */}
       {lightboxUrl && (
-        <ImageOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
+        <FilePreviewOverlay url={lightboxUrl.url} name={lightboxUrl.name} onClose={() => setLightboxUrl(null)} />
       )}
 
       {/* Expense reimbursement print (off-screen) */}
