@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
+import { EditProfileModal } from '@/components/expenses/EditProfileModal'
 import { useExpenses } from '@/hooks/useExpenses'
 import { useEmployeeProfiles } from '@/hooks/useEmployeeProfiles'
 import { cn, fmt, fmtDate } from '@/lib/format'
@@ -12,7 +13,7 @@ import { toast } from '@/lib/toast'
 import {
   Plus, Search, CheckCircle, DollarSign, Pencil, Trash2,
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
-  Eye, X, Download, Printer,
+  Eye, X, Download, Printer, Settings,
 } from 'lucide-react'
 import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails, EmployeeProfile } from '@/types'
 import { ENTITIES } from '@/types'
@@ -29,7 +30,7 @@ type SortDir = 'asc' | 'desc'
 export default function ExpensesPage() {
   const router = useRouter()
   const { expenses, loading, error, createExpense, updateExpense, setStatus, deleteExpense } = useExpenses()
-  const { profiles } = useEmployeeProfiles()
+  const { profiles, saveProfile } = useEmployeeProfiles()
 
   const [editing, setEditing] = useState<Expense | null>(null)
   const [creating, setCreating] = useState(false)
@@ -41,6 +42,7 @@ export default function ExpensesPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [printing, setPrinting] = useState<Expense | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [editingProfile, setEditingProfile] = useState<string | null>(null)
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<'profile' | 'list'>('profile')
   const [sortKey, setSortKey] = useState<SortKey>('date')
@@ -103,6 +105,15 @@ export default function ExpensesPage() {
       return { proj, projTotal, lineRows }
     })
 
+    const paymentFields = [
+      { label: 'Account Name', val: profile?.accName },
+      { label: 'Bank', val: profile?.bankName },
+      { label: 'Sort Code', val: profile?.sortCode },
+      { label: 'Account Number', val: profile?.accNum },
+      { label: 'IBAN', val: profile?.iban },
+      { label: 'SWIFT / BIC', val: profile?.swift },
+    ]
+
     const html = `<!DOCTYPE html><html><head><title>Expense Invoice — ${name}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -115,19 +126,19 @@ body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:11px;colo
 .party-block .label{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#9a9a9a;margin-bottom:6px;border-bottom:1px solid #e2e2e0;padding-bottom:3px}
 .party-block p{font-size:11px;line-height:1.6;color:#1a1a1a}
 .party-block .name{font-weight:700;font-size:12px}
+.missing{color:#92400e;background:#fffbeb;padding:1px 4px;font-family:monospace;font-size:10px}
 table{width:100%;border-collapse:collapse;margin-bottom:20px}
 th{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#9a9a9a;border-bottom:1px solid #e2e2e0;padding:6px 8px;text-align:left}
 td{padding:6px 8px;border-bottom:1px solid #f0f0ee;font-size:10px;vertical-align:top}
 td.amount{text-align:right;font-family:monospace;font-weight:600}
 .proj-header td{background:#f8f8f6;font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#9a9a9a;padding:4px 8px;border-bottom:1px solid #e2e2e0}
 .proj-subtotal td{border-top:1px solid #e2e2e0;font-size:10px;font-weight:600;color:#1a1a1a;padding:5px 8px}
-.grand-total-row td{border-top:3px solid #1a1a1a;font-size:13px;font-weight:700;padding:8px 8px}
+.grand-total-row td{border-top:3px solid #1a1a1a;font-size:13px;font-weight:700;padding:8px}
 .payment-section{margin-top:28px;padding-top:20px;border-top:2px solid #1a1a1a}
-.payment-section .label{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#9a9a9a;margin-bottom:8px}
+.payment-section>.label{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#9a9a9a;margin-bottom:8px}
 .payment-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .payment-item dt{font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#9a9a9a;margin-bottom:2px}
-.payment-item dd{font-family:monospace;font-size:10px;color:#1a1a1a}
-.status-badge{display:inline-block;font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border:1px solid #1a1a1a;padding:2px 8px;margin-top:6px}
+.status-badge{display:inline-block;font-family:monospace;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border:1px solid #fff;padding:2px 8px;margin-top:6px}
 .footer{margin-top:40px;font-family:monospace;font-size:9px;color:#9a9a9a;text-align:right}
 a{color:#1a1a1a;text-decoration:underline;font-size:9px}
 @media print{@page{size:A4;margin:1.5cm}body{font-size:10px}.page{padding:0;max-width:none}}
@@ -143,8 +154,8 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
   <div class="party-block">
     <div class="label">From</div>
     <p class="name">${name}</p>
-    ${profile?.invCompany ? `<p>${profile.invCompany}</p>` : ''}
-    ${profile?.invAddr ? `<p style="white-space:pre-line">${profile.invAddr}</p>` : ''}
+    ${profile?.invCompany?.trim() ? `<p>${profile.invCompany}</p>` : '<p class="missing">Company not provided</p>'}
+    ${profile?.invAddr?.trim() ? `<p style="white-space:pre-line">${profile.invAddr}</p>` : '<p class="missing">Address not provided</p>'}
   </div>
   <div class="party-block">
     <div class="label">Billed To</div>
@@ -169,19 +180,17 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
   <tr class="grand-total-row"><td colspan="4">Grand Total</td><td class="amount">${fmt(grandTotal)}</td><td></td></tr>
   </tbody>
 </table>
-${profile ? `<div class="payment-section">
+<div class="payment-section">
   <div class="label">Payment Details</div>
   <div class="payment-grid">
-    ${[
-      { label: 'Account Name', val: profile.accName },
-      { label: 'Bank', val: profile.bankName },
-      { label: 'Sort Code', val: profile.sortCode },
-      { label: 'Account Number', val: profile.accNum },
-      { label: 'IBAN', val: profile.iban },
-      { label: 'SWIFT / BIC', val: profile.swift },
-    ].filter(f => f.val).map(f => `<div class="payment-item"><dt>${f.label}</dt><dd>${f.val}</dd></div>`).join('')}
+    ${paymentFields.map(f => `<div class="payment-item">
+      <dt>${f.label}</dt>
+      ${f.val?.trim()
+        ? `<dd style="font-family:monospace;font-size:10px;color:#1a1a1a">${f.val}</dd>`
+        : `<dd class="missing">Not provided</dd>`}
+    </div>`).join('')}
   </div>
-</div>` : ''}
+</div>
 <div class="footer">AC Ledger · ${new Date().toLocaleDateString('en-GB')}</div>
 </div></body></html>`
 
@@ -420,7 +429,14 @@ ${profile ? `<div class="payment-section">
                         </div>
                       </div>
                       {/* Profile actions */}
-                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all" onClick={e => e.stopPropagation()}>
+                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all ml-1" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => setEditingProfile(group.name)}
+                          title="Edit profile"
+                          className="flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                        >
+                          <Settings size={10} /> Profile
+                        </button>
                         <button
                           onClick={() => exportProfileInvoicePDF(group.name, group.exps, profiles.find(p => p.name.toLowerCase() === group.name.toLowerCase()))}
                           title="Export reimbursement invoice PDF"
@@ -599,6 +615,15 @@ ${profile ? `<div class="payment-section">
         prefillBank={prefillBank}
         onSave={handleSave}
       />
+
+      {editingProfile && (
+        <EditProfileModal
+          name={editingProfile}
+          existing={profiles.find(p => p.name.toLowerCase() === editingProfile.toLowerCase()) ?? null}
+          onSave={saveProfile}
+          onClose={() => setEditingProfile(null)}
+        />
+      )}
     </>
   )
 }
