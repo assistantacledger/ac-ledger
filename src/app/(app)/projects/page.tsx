@@ -11,10 +11,11 @@ import { useExpenses } from '@/hooks/useExpenses'
 import { useAuth } from '@/contexts/AuthContext'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
-import { Plus, Pencil, Trash2, FolderOpen } from 'lucide-react'
+import { Plus, Pencil, Trash2, FolderOpen, Upload } from 'lucide-react'
 import type { Project, Entity, ProjectStatus } from '@/types'
 import { ENTITIES } from '@/types'
 import { toast } from '@/lib/toast'
+import { ProjectImport } from '@/components/projects/ProjectImport'
 
 const STATUSES: ProjectStatus[] = ['active', 'completed', 'on-hold']
 
@@ -45,6 +46,7 @@ export default function ProjectsPage() {
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [codeChangeWarn, setCodeChangeWarn] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   // Handle ?open=CODE param from other pages
   useEffect(() => {
@@ -198,6 +200,8 @@ export default function ProjectsPage() {
           markInvoicePaid={markPaid}
           updateExpense={updateExpense}
           anthropicKey={config?.anthropicKey}
+          projects={projects}
+          createProject={createProject}
         />
         <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>
           <ProjectFormBody form={form} set={set} editing={editing} />
@@ -224,6 +228,12 @@ export default function ProjectsPage() {
             {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <div className="flex-1" />
+          <button
+            onClick={() => setImportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+          >
+            <Upload size={11} /> Import Project
+          </button>
           <button onClick={openCreate}
             className="flex items-center gap-1.5 bg-ink text-white px-3 py-1.5 text-xs font-mono uppercase tracking-wider hover:bg-[#333] transition-colors">
             <Plus size={11} /> New Project
@@ -301,6 +311,21 @@ export default function ProjectsPage() {
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Edit · ${editing.code}` : 'New Project'} size="lg" footer={footer}>
         <ProjectFormBody form={form} set={set} editing={editing} />
       </Modal>
+
+      <ProjectImport
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        projects={projects}
+        createProject={createProject}
+        createInvoice={createInvoice}
+        anthropicKey={config?.anthropicKey}
+        onProjectCreated={code => {
+          setImportOpen(false)
+          const newProj = projects.find(p => p.code === code)
+          if (newProj) setSelectedProject(newProj)
+          toast('Project imported')
+        }}
+      />
     </>
   )
 }

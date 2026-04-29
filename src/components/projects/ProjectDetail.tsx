@@ -9,6 +9,7 @@ import {
   ChevronUp, ChevronDown, ChevronsUpDown, Table2, Zap,
 } from 'lucide-react'
 import { PaymentSheet } from './PaymentSheet'
+import { ProjectImport } from './ProjectImport'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
@@ -113,11 +114,14 @@ interface Props {
   markInvoicePaid?: (id: string) => Promise<void>
   updateExpense?: (id: string, data: ExpenseUpdate) => Promise<Expense>
   anthropicKey?: string
+  projects?: Project[]
+  createProject?: (data: Omit<Project, 'createdAt'>) => Project
 }
 
-export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, anthropicKey }: Props) {
+export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, anthropicKey, projects, createProject }: Props) {
   const [tab, setTab] = useState<Tab>('overview')
   const [deleteConfirmProject, setDeleteConfirmProject] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   // Invoice editing from project tab
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null)
   // Expense print
@@ -1305,8 +1309,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               )
             })()}
 
-            {/* Export summary */}
-            <div className="flex justify-end">
+            {/* Export summary + import */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <button
+                onClick={() => setImportOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+              >
+                <Upload size={11} /> Import Data
+              </button>
               <button onClick={printSummary}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
                 <Download size={11} /> Export Summary PDF
@@ -2524,6 +2534,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         prefillEmployee={undefined}
         prefillBank={undefined}
       />
+
+      {/* Import data modal */}
+      {projects && createProject && (
+        <ProjectImport
+          isOpen={importOpen}
+          onClose={() => setImportOpen(false)}
+          projects={projects}
+          createProject={createProject}
+          createInvoice={createInvoice}
+          anthropicKey={anthropicKey}
+          defaultProjectCode={project.code}
+          onProjectCreated={code => {
+            setImportOpen(false)
+            // If they created a new project rather than adding to this one, just toast
+            if (code !== project.code) toast(`Project ${code} created`)
+            else toast('Data imported')
+          }}
+        />
+      )}
     </div>
   )
 }
