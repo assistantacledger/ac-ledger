@@ -97,8 +97,14 @@ export async function POST(req: Request) {
     })
 
     if (!res.ok) {
-      const err = await res.text()
-      return Response.json({ error: `Anthropic API error: ${err}` }, { status: res.status })
+      let errBody: string
+      try {
+        const errJson = await res.json() as { error?: { message?: string } }
+        errBody = errJson?.error?.message ?? JSON.stringify(errJson)
+      } catch {
+        errBody = await res.text().catch(() => `HTTP ${res.status}`)
+      }
+      return Response.json({ error: `Anthropic API error: ${errBody}` }, { status: res.status })
     }
 
     const data = await res.json() as { content: Array<{ type: string; text: string }> }
@@ -109,6 +115,7 @@ export async function POST(req: Request) {
     const extracted = JSON.parse(jsonMatch[0])
     return Response.json({ extracted })
   } catch (e) {
-    return Response.json({ error: String(e) }, { status: 500 })
+    const msg = e instanceof Error ? e.message : String(e)
+    return Response.json({ error: msg }, { status: 500 })
   }
 }

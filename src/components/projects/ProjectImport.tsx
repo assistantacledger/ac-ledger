@@ -111,19 +111,32 @@ export function ProjectImport({
   function handleClose() { reset(); onClose() }
 
   // ── File handling ──
+  function getApiKey(): string | null {
+    if (anthropicKey) return anthropicKey
+    try {
+      const raw = localStorage.getItem('ledger_cfg3')
+      if (raw) {
+        const cfg = JSON.parse(raw) as { anthropicKey?: string }
+        if (cfg.anthropicKey) return cfg.anthropicKey
+      }
+    } catch { /* ignore */ }
+    return null
+  }
+
   function processFile(file: File) {
     if (!file.name.match(/\.(xlsx|xls|csv|pdf)$/i)) {
       setError('Only .xlsx, .xls, .csv, and .pdf files are supported.')
       return
     }
-    if (!anthropicKey) {
-      setError('Anthropic API key not set. Add it in Settings → Anthropic API Key.')
+    const key = getApiKey()
+    if (!key) {
+      setError('Please add your Anthropic API key in Settings first.')
       return
     }
-    void runExtraction(file)
+    void runExtraction(file, key)
   }
 
-  async function runExtraction(file: File) {
+  async function runExtraction(file: File, apiKey: string) {
     setFileName(file.name)
     setError('')
     setStep('extracting')
@@ -146,7 +159,7 @@ export function ProjectImport({
         if (content.length > MAX_TEXT_CHARS) {
           content = content.slice(0, MAX_TEXT_CHARS) + '\n\n[Content truncated — file too large]'
         }
-        body = { apiKey: anthropicKey, content }
+        body = { apiKey, content }
       } else {
         // PDF — base64 encode
         const buf = await file.arrayBuffer()
@@ -156,7 +169,7 @@ export function ProjectImport({
         for (let i = 0; i < bytes.length; i += chunk) {
           binary += String.fromCharCode(...Array.from(bytes.slice(i, i + chunk)))
         }
-        body = { apiKey: anthropicKey, base64: btoa(binary), mediaType: file.type || 'application/pdf' }
+        body = { apiKey, base64: btoa(binary), mediaType: file.type || 'application/pdf' }
       }
 
       const res = await fetch('/api/import-project', {
@@ -164,17 +177,26 @@ export function ProjectImport({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const data = await res.json() as { extracted?: Record<string, unknown>; error?: string }
+
+      let data: { extracted?: Record<string, unknown>; error?: string } = {}
+      try {
+        data = await res.json() as typeof data
+      } catch {
+        const text = await res.text().catch(() => '')
+        throw new Error(`Server returned non-JSON response (status ${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`)
+      }
 
       if (!res.ok || data.error) {
         setError(data.error ?? 'AI extraction failed. You can fill in the data manually below.')
+        setStep('preview')
+        return
       }
 
       // Apply whatever was extracted (even partial)
       applyExtracted(data.extracted ?? {})
       setStep('preview')
     } catch (e) {
-      setError(`Import failed: ${String(e)}`)
+      setError(e instanceof Error ? e.message : String(e))
       setStep('drop')
     }
   }
@@ -380,11 +402,11 @@ export function ProjectImport({
       {/* ── Drop / extracting ── */}
       {(step === 'drop' || step === 'extracting') && (
         <div className="px-6 py-8">
-          {!anthropicKey && (
+          {!getApiKey() && (
             <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 flex items-center gap-2">
               <AlertCircle size={13} className="text-amber-600 flex-shrink-0" />
               <p className="font-mono text-xs text-amber-800">
-                Anthropic API key not set — add it in <strong>Settings</strong> to enable AI extraction.
+                Please add your Anthropic API key in <strong>Settings</strong> first.
               </p>
             </div>
           )}
