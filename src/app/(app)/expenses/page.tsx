@@ -506,6 +506,9 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                                 )}
                                 <span className="font-mono text-xs font-semibold text-ink w-20 text-right">{fmt(exp.total)}</span>
                                 <span className={cn('badge', STATUS_BADGE[exp.status])}>{exp.status}</span>
+                                {exp.invoiced && (
+                                  <span className="font-mono text-[9px] uppercase tracking-wider text-muted border border-muted/40 px-1.5 py-0.5 flex-shrink-0">invoiced</span>
+                                )}
                                 {/* Row actions */}
                                 <div className="row-actions opacity-0 group-hover/row:opacity-100">
                                   <button onClick={() => handlePrint(exp)} title="Print PDF"
@@ -644,11 +647,16 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
         <ExpenseInvoiceSelector
           employeeName={invoiceSelector.name}
           expenses={invoiceSelector.exps}
-          onGenerate={selected => exportProfileInvoicePDF(
-            invoiceSelector.name,
-            selected,
-            profiles.find(p => p.name.toLowerCase() === invoiceSelector.name.toLowerCase())
-          )}
+          onGenerate={selected => {
+            exportProfileInvoicePDF(
+              invoiceSelector.name,
+              selected,
+              profiles.find(p => p.name.toLowerCase() === invoiceSelector.name.toLowerCase())
+            )
+            // Mark each selected expense as invoiced in Supabase
+            selected.forEach(exp => updateExpense(exp.id, { invoiced: true }))
+            toast(`${selected.length} expense${selected.length !== 1 ? 's' : ''} marked as invoiced`)
+          }}
           onClose={() => setInvoiceSelector(null)}
         />
       )}
