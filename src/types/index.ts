@@ -99,10 +99,11 @@ export interface Expense {
   receipt_urls: string[] | null
   bank_details: BankDetails | null
   total: number
+  invoice_id: string | null
   created_at: string
 }
 
-export type ExpenseInsert = Omit<Expense, 'id' | 'created_at'>
+export type ExpenseInsert = Omit<Expense, 'id' | 'created_at' | 'invoice_id'> & { invoice_id?: string | null }
 export type ExpenseUpdate = Partial<ExpenseInsert>
 
 // ─── Projects ────────────────────────────────────────────────────────────────

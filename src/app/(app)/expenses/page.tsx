@@ -6,6 +6,8 @@ import { Header } from '@/components/layout/Header'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
 import { EditProfileModal } from '@/components/expenses/EditProfileModal'
+import { ExpenseInvoiceSelector } from '@/components/expenses/ExpenseInvoiceSelector'
+import { FilePreviewOverlay } from '@/components/ui/FilePreviewOverlay'
 import { useExpenses } from '@/hooks/useExpenses'
 import { useEmployeeProfiles } from '@/hooks/useEmployeeProfiles'
 import { cn, fmt, fmtDate } from '@/lib/format'
@@ -13,7 +15,7 @@ import { toast } from '@/lib/toast'
 import {
   Plus, Search, CheckCircle, DollarSign, Pencil, Trash2,
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
-  Eye, X, Download, Printer, Settings,
+  Eye, Download, Printer, Settings,
 } from 'lucide-react'
 import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails, EmployeeProfile } from '@/types'
 import { ENTITIES } from '@/types'
@@ -41,8 +43,9 @@ export default function ExpensesPage() {
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [printing, setPrinting] = useState<Expense | null>(null)
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ url: string; name?: string } | null>(null)
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
+  const [invoiceSelector, setInvoiceSelector] = useState<{ name: string; exps: Expense[] } | null>(null)
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<'profile' | 'list'>('profile')
   const [sortKey, setSortKey] = useState<SortKey>('date')
@@ -315,16 +318,8 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
           <ExpenseReimbursePDF expense={printing} forPrint={true} />
         </div>
       )}
-      {lightboxUrl && (
-        <div className="fixed inset-0 z-[60] flex flex-col bg-black/90" onClick={() => setLightboxUrl(null)}>
-          <div className="flex items-center justify-end px-6 py-3">
-            <button onClick={() => setLightboxUrl(null)} className="text-white/60 hover:text-white"><X size={18} /></button>
-          </div>
-          <div className="flex-1 flex items-center justify-center p-6" onClick={e => e.stopPropagation()}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={lightboxUrl} alt="Receipt" className="max-w-full max-h-full object-contain" />
-          </div>
-        </div>
+      {preview && (
+        <FilePreviewOverlay url={preview.url} name={preview.name} onClose={() => setPreview(null)} />
       )}
       <Header title="Expenses" />
       <main className="flex-1 overflow-y-auto px-6 py-6">
@@ -438,8 +433,8 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                           <Settings size={10} /> Profile
                         </button>
                         <button
-                          onClick={() => exportProfileInvoicePDF(group.name, group.exps, profiles.find(p => p.name.toLowerCase() === group.name.toLowerCase()))}
-                          title="Export reimbursement invoice PDF"
+                          onClick={() => setInvoiceSelector({ name: group.name, exps: group.exps })}
+                          title="Generate reimbursement invoice PDF"
                           className="flex items-center gap-1 px-2 py-1 text-xs font-mono border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
                         >
                           <Printer size={10} /> Invoice
@@ -486,6 +481,29 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                                 className="flex items-center gap-3 px-12 py-2 hover:bg-cream/50 transition-colors group/row border-t border-rule/30">
                                 <span className="font-mono text-xs text-muted w-20 flex-shrink-0">{fmtDate(exp.date)}</span>
                                 <span className="flex-1 text-xs text-ink truncate">{exp.notes || '—'}</span>
+                                {/* Receipt thumbnails */}
+                                {(exp.receipt_urls ?? []).length > 0 && (
+                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                    {(exp.receipt_urls ?? []).map((url, i) => {
+                                      const isPdf = url.toLowerCase().includes('.pdf')
+                                      return (
+                                        <button
+                                          key={i}
+                                          onClick={() => setPreview({ url, name: `Receipt ${i + 1} — ${exp.employee}` })}
+                                          title={`View receipt ${i + 1}`}
+                                          className="w-7 h-7 border border-rule bg-white hover:border-ink transition-colors flex items-center justify-center overflow-hidden flex-shrink-0"
+                                        >
+                                          {isPdf ? (
+                                            <FileText size={12} className="text-muted" />
+                                          ) : (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img src={url} alt={`Receipt ${i + 1}`} className="w-full h-full object-cover" />
+                                          )}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )}
                                 <span className="font-mono text-xs font-semibold text-ink w-20 text-right">{fmt(exp.total)}</span>
                                 <span className={cn('badge', STATUS_BADGE[exp.status])}>{exp.status}</span>
                                 {/* Row actions */}
@@ -565,11 +583,8 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                       <td className="px-5 py-2.5">
                         <div className="row-actions justify-end">
                           {(exp.receipt_urls ?? []).length > 0 && (
-                            <button onClick={() => {
-                              const url = exp.receipt_urls![0]
-                              if (url.includes('.pdf')) window.open(url, '_blank')
-                              else setLightboxUrl(url)
-                            }} title="View receipt" className="p-1 text-muted hover:text-ink transition-colors">
+                            <button onClick={() => setPreview({ url: exp.receipt_urls![0], name: `Receipt — ${exp.employee}` })}
+                              title="View receipt" className="p-1 text-muted hover:text-ink transition-colors">
                               <Eye size={13} />
                             </button>
                           )}
@@ -622,6 +637,19 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
           existing={profiles.find(p => p.name.toLowerCase() === editingProfile.toLowerCase()) ?? null}
           onSave={saveProfile}
           onClose={() => setEditingProfile(null)}
+        />
+      )}
+
+      {invoiceSelector && (
+        <ExpenseInvoiceSelector
+          employeeName={invoiceSelector.name}
+          expenses={invoiceSelector.exps}
+          onGenerate={selected => exportProfileInvoicePDF(
+            invoiceSelector.name,
+            selected,
+            profiles.find(p => p.name.toLowerCase() === invoiceSelector.name.toLowerCase())
+          )}
+          onClose={() => setInvoiceSelector(null)}
         />
       )}
     </>

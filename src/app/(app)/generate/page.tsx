@@ -7,11 +7,13 @@ import { Modal } from '@/components/ui/Modal'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useTemplates } from '@/hooks/useTemplates'
 import { cn, fmt, getNextRef, todayISO } from '@/lib/format'
-import { Plus, Trash2, RefreshCw, Printer, Save, LayoutTemplate, Link, Copy, Check } from 'lucide-react'
-import type { Invoice, InvoiceInsert, InvoiceStatus, Entity, LineItem, CompanySettings } from '@/types'
+import { Plus, Trash2, RefreshCw, Printer, Save, LayoutTemplate, Link, Copy, Check, Receipt } from 'lucide-react'
+import type { Invoice, InvoiceInsert, InvoiceStatus, Entity, LineItem, CompanySettings, Expense } from '@/types'
 import { ENTITIES, ENTITY_STORAGE_KEYS } from '@/types'
 import { useProjectCodes } from '@/hooks/useProjectCodes'
 import { ProjectCodeSelect } from '@/components/ui/ProjectCodeSelect'
+import { useExpenses } from '@/hooks/useExpenses'
+import { ExpensePickerModal } from '@/components/expenses/ExpensePickerModal'
 
 const STATUSES: InvoiceStatus[] = ['draft', 'pending', 'submitted', 'approved', 'sent', 'overdue', 'part-paid', 'paid']
 const CURRENCIES = ['£', '$', '€']
@@ -51,6 +53,7 @@ function getCompanySettings(entity: Entity): CompanySettings | null {
 
 export default function GeneratePage() {
   const { invoices, createInvoice, updateInvoice } = useInvoices()
+  const { expenses, updateExpense: updateExpenseRecord } = useExpenses()
   const { saveTemplate } = useTemplates()
   const projectCodes = useProjectCodes(invoices)
   const [form, setForm] = useState<InvoiceInsert>(emptyInvoice)
@@ -66,6 +69,8 @@ export default function GeneratePage() {
   const [templateModalOpen, setTemplateModalOpen] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateSaved, setTemplateSaved] = useState(false)
+  const [expensePicker, setExpensePicker] = useState(false)
+  const [pendingExpenseIds, setPendingExpenseIds] = useState<string[]>([])
 
   // Client submission link state
   const [linkEntity, setLinkEntity] = useState<Entity>('Actually Creative')
@@ -151,6 +156,22 @@ export default function GeneratePage() {
   }
 
   function addLine() { set('line_items', [...(form.line_items ?? []), blankLine()]) }
+
+  function addExpensesAsLines(selected: Expense[]) {
+    const newLines: LineItem[] = selected.map(exp => {
+      const desc = exp.notes?.trim()
+        || (exp.line_items?.map(li => li.description).filter(Boolean).join(', '))
+        || `Expenses — ${exp.employee}`
+      const amount = Number(exp.total)
+      return { description: desc, qty: 1, unit: amount, total: amount }
+    })
+    const existing = (form.line_items ?? []).filter(l => l.description || l.total)
+    const merged = [...existing, ...newLines]
+    set('line_items', merged)
+    set('amount', parseFloat(merged.reduce((t, l) => t + Number(l.total), 0).toFixed(2)))
+    setPendingExpenseIds(prev => [...prev, ...selected.map(e => e.id)])
+  }
+
   function removeLine(idx: number) {
     const lines = (form.line_items ?? []).filter((_, i) => i !== idx)
     set('line_items', lines)
@@ -172,6 +193,11 @@ export default function GeneratePage() {
       const created = await createInvoice(form)
       setSaved(true)
       setSavedInvoiceId(created.id)
+      // Link any picked expenses to this invoice
+      if (pendingExpenseIds.length > 0) {
+        await Promise.all(pendingExpenseIds.map(id => updateExpenseRecord(id, { invoice_id: created.id })))
+        setPendingExpenseIds([])
+      }
     } catch (e) {
       setError(String(e))
     } finally {
@@ -417,10 +443,21 @@ export default function GeneratePage() {
             <div className="px-5 py-5">
               <div className="flex items-center justify-between mb-3">
                 <p className="tbl-lbl">Line Items</p>
-                <button onClick={addLine} className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
-                  <Plus size={11} /> Add line
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setExpensePicker(true)}
+                    className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors border border-rule px-2 py-1">
+                    <Receipt size={10} /> Add expenses
+                  </button>
+                  <button onClick={addLine} className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
+                    <Plus size={11} /> Add line
+                  </button>
+                </div>
               </div>
+              {pendingExpenseIds.length > 0 && (
+                <p className="font-mono text-[10px] text-ac-amber mb-2">
+                  {pendingExpenseIds.length} expense{pendingExpenseIds.length !== 1 ? 's' : ''} will be linked on save
+                </p>
+              )}
 
               <div className="border border-rule overflow-hidden">
                 <table className="w-full">
@@ -637,6 +674,14 @@ export default function GeneratePage() {
           </p>
         </div>
       </Modal>
+
+      {expensePicker && (
+        <ExpensePickerModal
+          expenses={expenses}
+          onConfirm={addExpensesAsLines}
+          onClose={() => setExpensePicker(false)}
+        />
+      )}
     </>
   )
 }
