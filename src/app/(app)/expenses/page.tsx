@@ -17,8 +17,8 @@ import {
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
   Eye, Download, Printer, Settings,
 } from 'lucide-react'
-import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails, EmployeeProfile } from '@/types'
-import { ENTITIES } from '@/types'
+import type { Expense, ExpenseInsert, ExpenseStatus, Entity, BankDetails, EmployeeProfile, CompanySettings } from '@/types'
+import { ENTITIES, ENTITY_STORAGE_KEYS } from '@/types'
 
 const STATUS_BADGE: Record<ExpenseStatus, string> = {
   submitted: 'badge-submitted',
@@ -91,7 +91,22 @@ export default function ExpensesPage() {
     const statusDisplay = statuses.includes('paid') && statuses.length === 1 ? 'PAID'
       : statuses.includes('approved') ? 'APPROVED'
       : 'SUBMITTED'
-    const entity = exps[0]?.entity ?? 'Actually Creative'
+
+    // Determine dominant entity (most common across selected expenses)
+    const entityCounts = new Map<Entity, number>()
+    for (const exp of exps) {
+      entityCounts.set(exp.entity, (entityCounts.get(exp.entity) ?? 0) + 1)
+    }
+    const entity: Entity = exps.length === 0
+      ? 'Actually Creative'
+      : Array.from(entityCounts.entries()).sort((a, b) => b[1] - a[1])[0][0]
+
+    // Load company settings for the entity from localStorage
+    let company: CompanySettings | null = null
+    try {
+      const raw = localStorage.getItem(ENTITY_STORAGE_KEYS[entity])
+      if (raw) company = JSON.parse(raw) as CompanySettings
+    } catch { /* ignore */ }
 
     const projectRows = Array.from(byProject.entries()).map(([proj, projExps]) => {
       const projTotal = projExps.reduce((s, e) => s + Number(e.total), 0)
@@ -162,7 +177,11 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
   </div>
   <div class="party-block">
     <div class="label">Billed To</div>
-    <p class="name">${entity}</p>
+    <p class="name">${company?.name?.trim() || entity}</p>
+    ${company?.addr?.trim() ? `<p style="white-space:pre-line">${company.addr}</p>` : ''}
+    ${company?.email?.trim() ? `<p>${company.email}</p>` : ''}
+    ${company?.phone?.trim() ? `<p>${company.phone}</p>` : ''}
+    ${company?.vatNum?.trim() ? `<p style="font-family:monospace;font-size:10px;color:#9a9a9a">VAT ${company.vatNum}</p>` : ''}
   </div>
 </div>
 <table>
