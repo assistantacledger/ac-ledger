@@ -41,6 +41,7 @@ export default function ExpensesPage() {
   const [search, setSearch] = useState('')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<ExpenseStatus | 'all'>('all')
+  const [projectFilter, setProjectFilter] = useState<string>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [printing, setPrinting] = useState<Expense | null>(null)
   const [preview, setPreview] = useState<{ url: string; name?: string } | null>(null)
@@ -50,6 +51,7 @@ export default function ExpensesPage() {
   const [viewMode, setViewMode] = useState<'profile' | 'list'>('profile')
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; exp: Expense } | null>(null)
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -225,10 +227,22 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
     return sortDir === 'asc' ? <ArrowUp size={10} className="text-ink" /> : <ArrowDown size={10} className="text-ink" />
   }
 
+  // Unique project codes for filter dropdown
+  const projectOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const e of expenses) {
+      if (e.project_code && !seen.has(e.project_code)) {
+        seen.set(e.project_code, e.project_name ?? e.project_code)
+      }
+    }
+    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [expenses])
+
   const filtered = useMemo(() => {
     let rows = expenses
     if (entityFilter !== 'all') rows = rows.filter(e => e.entity === entityFilter)
     if (statusFilter !== 'all') rows = rows.filter(e => e.status === statusFilter)
+    if (projectFilter !== 'all') rows = rows.filter(e => e.project_code === projectFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
       rows = rows.filter(e =>
@@ -239,7 +253,7 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
       )
     }
     return rows
-  }, [expenses, entityFilter, statusFilter, search])
+  }, [expenses, entityFilter, statusFilter, projectFilter, search])
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -300,6 +314,18 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
   async function handleSetStatus(id: string, status: ExpenseStatus) {
     await setStatus(id, status)
     toast(`Marked ${status}`)
+  }
+
+  async function cycleStatus(exp: Expense) {
+    const next: ExpenseStatus = exp.status === 'submitted' ? 'approved' : exp.status === 'approved' ? 'paid' : 'submitted'
+    await setStatus(exp.id, next)
+    toast(`Marked ${next}`)
+    setContextMenu(null)
+  }
+
+  function openContextMenu(e: React.MouseEvent, exp: Expense) {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, exp })
   }
 
   function handlePrint(exp: Expense) {
@@ -369,6 +395,15 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
               <option value="approved">Approved</option>
               <option value="paid">Paid</option>
             </select>
+            {projectOptions.length > 0 && (
+              <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)}
+                className="text-xs border border-rule bg-white px-2 py-1.5 text-ink focus:outline-none font-mono">
+                <option value="all">All projects</option>
+                {projectOptions.map(([code, name]) => (
+                  <option key={code} value={code}>{code}{name !== code ? ` · ${name}` : ''}</option>
+                ))}
+              </select>
+            )}
             {/* View toggle */}
             <div className="flex border border-rule">
               <button onClick={() => setViewMode('profile')}
@@ -393,6 +428,29 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
               <Plus size={11} /> New
             </button>
           </div>
+
+          {/* Project filter summary banner */}
+          {projectFilter !== 'all' && (() => {
+            const projExps = filtered
+            const projTotal = projExps.reduce((t, e) => t + Number(e.total), 0)
+            const projOutstanding = projExps.filter(e => e.status !== 'paid').reduce((t, e) => t + Number(e.total), 0)
+            const projName = projectOptions.find(([c]) => c === projectFilter)?.[1] ?? projectFilter
+            return (
+              <div className="px-5 py-2.5 bg-cream border-b border-rule flex items-center gap-4 flex-wrap">
+                <span className="font-mono text-xs font-semibold text-ink">{projectFilter}</span>
+                {projName !== projectFilter && <span className="text-xs text-muted">{projName}</span>}
+                <span className="font-mono text-xs text-muted">·</span>
+                <span className="font-mono text-xs text-muted">{projExps.length} expense{projExps.length !== 1 ? 's' : ''}</span>
+                <span className="font-mono text-xs text-muted">Total: <span className="text-ink font-semibold">{fmt(projTotal)}</span></span>
+                {projOutstanding > 0 && (
+                  <span className="font-mono text-xs text-ac-amber">Outstanding: {fmt(projOutstanding)}</span>
+                )}
+                <button onClick={() => setProjectFilter('all')} className="ml-auto font-mono text-[10px] text-muted hover:text-ink transition-colors">
+                  Clear filter ×
+                </button>
+              </div>
+            )
+          })()}
 
           {/* Content */}
           {loading ? (
@@ -524,7 +582,12 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                                   </div>
                                 )}
                                 <span className="font-mono text-xs font-semibold text-ink w-20 text-right">{fmt(exp.total)}</span>
-                                <span className={cn('badge', STATUS_BADGE[exp.status])}>{exp.status}</span>
+                                <button
+                                  onClick={() => void cycleStatus(exp)}
+                                  onContextMenu={e => openContextMenu(e, exp)}
+                                  title="Click to cycle status · Right-click for options"
+                                  className={cn('badge cursor-pointer hover:opacity-75 transition-opacity select-none', STATUS_BADGE[exp.status])}
+                                >{exp.status}</button>
                                 {exp.invoiced && (
                                   <span className="font-mono text-[9px] uppercase tracking-wider text-muted border border-muted/40 px-1.5 py-0.5 flex-shrink-0">invoiced</span>
                                 )}
@@ -600,7 +663,12 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                       </td>
                       <td className="px-3 py-2.5 text-sm font-semibold text-right">{fmt(exp.total)}</td>
                       <td className="px-3 py-2.5">
-                        <span className={cn('badge', STATUS_BADGE[exp.status])}>{exp.status}</span>
+                        <button
+                          onClick={() => void cycleStatus(exp)}
+                          onContextMenu={e => openContextMenu(e, exp)}
+                          title="Click to cycle status · Right-click for options"
+                          className={cn('badge cursor-pointer hover:opacity-75 transition-opacity select-none', STATUS_BADGE[exp.status])}
+                        >{exp.status}</button>
                       </td>
                       <td className="px-5 py-2.5">
                         <div className="row-actions justify-end">
@@ -643,6 +711,38 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
           )}
         </div>
       </main>
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} />
+          <div
+            className="fixed z-50 bg-white border border-rule shadow-lg min-w-[180px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <div className="px-3 py-1.5 border-b border-rule">
+              <p className="font-mono text-[10px] text-muted uppercase tracking-wider truncate">{contextMenu.exp.employee}</p>
+            </div>
+            {(['submitted', 'approved', 'paid'] as ExpenseStatus[]).map(s => (
+              <button key={s}
+                onClick={() => { void handleSetStatus(contextMenu.exp.id, s); setContextMenu(null) }}
+                className={cn('w-full text-left px-4 py-2 font-mono text-xs hover:bg-cream transition-colors border-b border-rule/50 last:border-0 flex items-center gap-2',
+                  contextMenu.exp.status === s ? 'text-ink font-semibold' : 'text-muted')}
+              >
+                {s === 'paid' ? <CheckCircle size={10} /> : s === 'approved' ? <CheckCircle size={10} className="opacity-50" /> : <span className="w-2.5" />}
+                Mark as {s}
+                {contextMenu.exp.status === s && <span className="ml-auto font-mono text-[9px] text-muted">current</span>}
+              </button>
+            ))}
+            <button
+              onClick={() => { handleDelete(contextMenu.exp.id); setContextMenu(null) }}
+              className="w-full text-left px-4 py-2 font-mono text-xs text-red-500 hover:bg-red-50 transition-colors flex items-center gap-2"
+            >
+              <Trash2 size={10} /> Delete
+            </button>
+          </div>
+        </>
+      )}
 
       <ExpenseModal
         isOpen={creating || !!editing}

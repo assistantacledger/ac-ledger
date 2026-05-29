@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import {
   ArrowLeft, Pencil, Plus, Trash2, Upload, FileText, X, Eye,
   ExternalLink, GripVertical, User, CheckCircle, ImageIcon, Download,
   Sparkles, AlertCircle, Link2, Link2Off, Printer,
-  ChevronUp, ChevronDown, ChevronsUpDown, Table2, Zap,
+  ChevronUp, ChevronDown, ChevronsUpDown, Table2, Zap, DollarSign,
+  ChevronRight,
 } from 'lucide-react'
 import { PaymentSheet } from './PaymentSheet'
 import { ProjectImport } from './ProjectImport'
@@ -21,8 +22,70 @@ import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
 import type {
   Project, Invoice, Expense, ExpenseInsert, ExpenseUpdate, InvoiceInsert, InvoiceUpdate,
-  ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus,
+  ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus, EmployeeProfile,
 } from '@/types'
+
+// ─── Employee Autocomplete ────────────────────────────────────────────────────
+
+function EmployeeAutocomplete({ value, onChange, allEmployeeNames, profiles }: {
+  value: string
+  onChange: (name: string) => void
+  allEmployeeNames: string[]
+  profiles: EmployeeProfile[]
+}) {
+  const [query, setQuery] = useState(value)
+  const [open, setOpen] = useState(false)
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return allEmployeeNames.slice(0, 8)
+    return allEmployeeNames.filter(n => n.toLowerCase().includes(q)).slice(0, 8)
+  }, [query, allEmployeeNames])
+
+  const hasProfile = profiles.some(p => p.name.toLowerCase() === value.toLowerCase())
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <input
+          value={query}
+          onChange={e => { setQuery(e.target.value); onChange(e.target.value); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && suggestions.length > 0) {
+              onChange(suggestions[0]); setQuery(suggestions[0]); setOpen(false)
+            }
+            if (e.key === 'Escape') setOpen(false)
+          }}
+          placeholder="Employee name"
+          className="border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none w-44 pr-14"
+        />
+        {hasProfile && (
+          <span className="absolute right-1.5 top-1/2 -translate-y-1/2 font-mono text-[8px] text-ac-green uppercase tracking-wider pointer-events-none">✓ Profile</span>
+        )}
+      </div>
+      {open && suggestions.length > 0 && (
+        <div className="absolute z-40 top-full left-0 mt-0.5 bg-white border border-rule shadow-md min-w-[200px] max-h-[180px] overflow-y-auto">
+          {suggestions.map(name => {
+            const hasProf = profiles.some(p => p.name.toLowerCase() === name.toLowerCase())
+            return (
+              <button
+                key={name}
+                onMouseDown={() => { onChange(name); setQuery(name); setOpen(false) }}
+                className="w-full text-left px-3 py-1.5 text-xs hover:bg-cream flex items-center gap-2 border-b border-rule/50 last:border-0"
+              >
+                <User size={9} className="text-muted flex-shrink-0" />
+                <span className="flex-1">{name}</span>
+                {hasProf && <span className="font-mono text-[8px] text-ac-green bg-ac-green/10 px-1">Profile</span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -37,7 +100,7 @@ const COST_STATUS_CLS: Record<CostStatus, string> = {
   paid: 'badge-paid',
 }
 
-type CostSortKey = 'description' | 'category' | 'estimated' | 'actual' | 'status' | 'dueDate' | 'hasInvoice'
+type CostSortKey = 'description' | 'category' | 'qty' | 'estimated' | 'actual' | 'status' | 'dueDate' | 'hasInvoice'
 type ReconLinks = { manual: { costId: string; invoiceId: string }[]; broken: { costId: string; invoiceId: string }[] }
 const EMPTY_LINKS: ReconLinks = { manual: [], broken: [] }
 
@@ -48,6 +111,13 @@ function lsGet<T>(key: string, fallback: T): T {
 }
 function lsSet(key: string, val: unknown) {
   try { localStorage.setItem(key, JSON.stringify(val)) } catch { /* ignore */ }
+}
+
+// ─── Cost total helper ────────────────────────────────────────────────────────
+// Total = qty × unit price (estimated). Falls back to actual for legacy rows
+// that were saved before qty was introduced.
+function costTotal(c: { qty?: number; estimated: number; actual: number }): number {
+  return (c.qty ?? 1) * c.estimated
 }
 
 // ─── URL auto-linker ──────────────────────────────────────────────────────────
@@ -115,12 +185,13 @@ interface Props {
   updateInvoice?: (id: string, data: InvoiceUpdate) => Promise<Invoice>
   markInvoicePaid?: (id: string) => Promise<void>
   updateExpense?: (id: string, data: ExpenseUpdate) => Promise<Expense>
+  deleteExpense?: (id: string) => Promise<void>
   anthropicKey?: string
   projects?: Project[]
   createProject?: (data: Omit<Project, 'createdAt'>) => Project
 }
 
-export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, anthropicKey, projects, createProject }: Props) {
+export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, deleteExpense, anthropicKey, projects, createProject }: Props) {
   const [tab, setTab] = useState<Tab>('overview')
   const [deleteConfirmProject, setDeleteConfirmProject] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -151,7 +222,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [costs, setCosts] = useState<ProjectCost[]>([])
   const [editingCost, setEditingCost] = useState<string | null>(null)
   const [newCost, setNewCost] = useState<Omit<ProjectCost, 'id'>>({
-    description: '', category: 'Other', estimated: 0, actual: 0, status: 'planned', notes: '',
+    description: '', category: 'Other', qty: 1, estimated: 0, actual: 0, status: 'planned', notes: '',
   })
   const [addingCost, setAddingCost] = useState(false)
   const [uploadingReceipt, setUploadingReceipt] = useState<string | null>(null)
@@ -167,6 +238,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // Expense actions
   const [addingReceiptExpense, setAddingReceiptExpense] = useState<string | null>(null)
   const [approvingExpense, setApprovingExpense] = useState<string | null>(null)
+  // Expense tab state
+  const [paidExpCollapsed, setPaidExpCollapsed] = useState(true)
+  const [expDeleteConfirm, setExpDeleteConfirm] = useState<string | null>(null)
+  const [markAllPaidConfirm, setMarkAllPaidConfirm] = useState(false)
+  const [expenseEditModal, setExpenseEditModal] = useState<Expense | null>(null)
+  // Costs bulk selection
+  const [costSelectedIds, setCostSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkEmpStep, setBulkEmpStep] = useState<'ask' | 'one-name' | 'per-row' | null>(null)
+  const [bulkEmpName, setBulkEmpName] = useState('')
+  const [bulkEmpRows, setBulkEmpRows] = useState<{ costId: string; name: string }[]>([])
+  const [bulkCreating, setBulkCreating] = useState(false)
 
   // Cost → invoice forms (keyed by cost.id)
   type ExtractedField = { value: unknown; confidence: number }
@@ -196,7 +278,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   function getCostForm(costId: string, cost: ProjectCost): CostInvoiceForm {
     return invoiceForms[costId] ?? {
       ...BLANK_FORM, open: false,
-      party: cost.description, amount: cost.actual || cost.estimated,
+      party: cost.description, amount: costTotal(cost),
       notes: `Cost item: ${cost.description}`,
     }
   }
@@ -306,7 +388,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         extracting: false,
         party:    pick('party',    cur.party || cost.description),
         ref:      pick('ref',      cur.ref),
-        amount:   ext.amount?.value ? Number(ext.amount.value) : (cur.amount || cost.actual || cost.estimated),
+        amount:   ext.amount?.value ? Number(ext.amount.value) : (cur.amount || costTotal(cost)),
         currency: pick('currency', cur.currency || '£'),
         due:      pick('due',      cur.due),
         bankName: pick('bankName', cur.bankName),
@@ -536,13 +618,21 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const projInvoices = invoices.filter(i => i.project_code === code)
   const projExpenses = expenses.filter(e => e.project_code === code)
 
+  // ── Employee autocomplete data ──
+  const employeeProfiles = useMemo(() => lsGet<EmployeeProfile[]>('ledger_employee_profiles', []), [])
+  const allEmployeeNames = useMemo(() => {
+    const fromExpenses = expenses.map(e => e.employee).filter(Boolean) as string[]
+    const fromProfiles = employeeProfiles.map(p => p.name)
+    return Array.from(new Set([...fromProfiles, ...fromExpenses])).sort()
+  }, [expenses, employeeProfiles])
+
   // ── Financial summary ──
   const totalBillable = projInvoices.filter(i => i.type === 'receivable').reduce((t, i) => t + Number(i.amount), 0)
   const totalCollected = projInvoices.filter(i => i.type === 'receivable' && i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
   const totalOutgoings = projInvoices.filter(i => i.type === 'payable').reduce((t, i) => t + Number(i.amount), 0)
   const totalExpenses = projExpenses.reduce((t, e) => t + Number(e.total), 0)
   // Exclude employee costs that have been promoted to Supabase expenses (avoid double-counting)
-  const totalCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + Number(c.actual || c.estimated), 0)
+  const totalCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + costTotal(c), 0)
   const netPosition = totalBillable - totalOutgoings - totalExpenses - totalCosts
 
   // ── Delete project ──
@@ -627,14 +717,23 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   function addCost() {
     if (!newCost.description.trim()) return
-    const entry: ProjectCost = { id: crypto.randomUUID(), ...newCost }
+    const total = costTotal(newCost)
+    const entry: ProjectCost = { id: crypto.randomUUID(), ...newCost, actual: total }
     saveCosts([...costs, entry])
-    setNewCost({ description: '', category: 'Other', estimated: 0, actual: 0, status: 'planned', notes: '' })
+    setNewCost({ description: '', category: 'Other', qty: 1, estimated: 0, actual: 0, status: 'planned', notes: '' })
     setAddingCost(false)
   }
 
   function updateCost(id: string, patch: Partial<ProjectCost>) {
-    saveCosts(costs.map(c => c.id === id ? { ...c, ...patch } : c))
+    saveCosts(costs.map(c => {
+      if (c.id !== id) return c
+      const updated = { ...c, ...patch }
+      // Auto-update actual (total) when qty or unit price changes
+      if ('qty' in patch || 'estimated' in patch) {
+        updated.actual = costTotal(updated)
+      }
+      return updated
+    }))
   }
 
   function deleteCost(id: string) {
@@ -702,7 +801,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     if (!cost?.employeeName?.trim()) return
     setCreatingExpense(costId)
     try {
-      const amount = cost.actual || cost.estimated
+      const amount = costTotal(cost)
       const data: ExpenseInsert = {
         employee: cost.employeeName,
         date: todayISO(),
@@ -718,8 +817,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       }
       const created = await createExpense(data)
       updateCost(costId, { expenseId: created.id })
+      toast('Expense created — see Expenses tab')
     } catch (e) {
-      alert(`Failed to create expense: ${String(e)}`)
+      toast(`Failed to create expense: ${String(e)}`, 'error')
     } finally {
       setCreatingExpense(null)
     }
@@ -727,18 +827,23 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   // ── CSV export ──
   function exportCostsCSV() {
-    const header = 'Description,Category,Estimated,Actual,Status,Due Date,Employee,Receipt URL,Notes'
-    const rows = costs.map(c => [
-      `"${c.description.replace(/"/g, '""')}"`,
-      c.category,
-      c.estimated,
-      c.actual,
-      c.status,
-      c.dueDate ?? '',
-      c.employeeName ?? '',
-      c.receiptUrl ?? '',
-      `"${(c.notes ?? '').replace(/"/g, '""')}"`,
-    ].join(','))
+    const header = 'Description,Category,Qty,Unit Price,Total,Status,Due Date,Employee,Receipt URL,Notes'
+    const rows = costs.map(c => {
+      const qty = c.qty ?? 1
+      const total = costTotal(c)
+      return [
+        `"${c.description.replace(/"/g, '""')}"`,
+        c.category,
+        qty,
+        c.estimated,
+        total,
+        c.status,
+        c.dueDate ?? '',
+        c.employeeName ?? '',
+        c.receiptUrl ?? '',
+        `"${(c.notes ?? '').replace(/"/g, '""')}"`,
+      ].join(',')
+    })
     const csv = [header, ...rows].join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -766,8 +871,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     let av: string | number = '', bv: string | number = ''
     if (costSortKey === 'description') { av = a.description; bv = b.description }
     else if (costSortKey === 'category') { av = a.category; bv = b.category }
+    else if (costSortKey === 'qty') { av = a.qty ?? 1; bv = b.qty ?? 1 }
     else if (costSortKey === 'estimated') { av = a.estimated; bv = b.estimated }
-    else if (costSortKey === 'actual') { av = a.actual; bv = b.actual }
+    else if (costSortKey === 'actual') { av = costTotal(a); bv = costTotal(b) }
     else if (costSortKey === 'status') { av = a.status; bv = b.status }
     else if (costSortKey === 'dueDate') { av = a.dueDate ?? ''; bv = b.dueDate ?? '' }
     else if (costSortKey === 'hasInvoice') { av = a.expenseId ? 1 : 0; bv = b.expenseId ? 1 : 0 }
@@ -809,6 +915,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       id: crypto.randomUUID(),
       description: [inv.party, inv.ref].filter(Boolean).join(' — '),
       category: 'Other',
+      qty: 1,
       estimated: Number(inv.amount),
       actual: Number(inv.amount),
       status: costStatus,
@@ -859,13 +966,93 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   async function approveExpense(expId: string) {
     setApprovingExpense(expId)
     try {
-      const { error } = await sb.from('expenses').update({ status: 'approved' }).eq('id', expId)
-      if (error) throw error
+      if (updateExpense) {
+        await updateExpense(expId, { status: 'approved' })
+      } else {
+        const { error } = await sb.from('expenses').update({ status: 'approved' }).eq('id', expId)
+        if (error) throw error
+      }
       toast('Expense approved')
     } catch (e) {
       toast(`Failed: ${String(e)}`, 'error')
     } finally {
       setApprovingExpense(null)
+    }
+  }
+
+  // ── Cycle expense status: submitted → approved → paid → submitted ──
+  async function cycleExpenseStatus(expId: string, current: string) {
+    if (!updateExpense) return
+    const next = current === 'submitted' ? 'approved' : current === 'approved' ? 'paid' : 'submitted'
+    try {
+      await updateExpense(expId, { status: next as 'submitted' | 'approved' | 'paid' })
+      toast(`Marked ${next}`)
+    } catch (e) {
+      toast(`Failed: ${String(e)}`, 'error')
+    }
+  }
+
+  // ── Mark all outstanding expenses as paid ──
+  async function handleMarkAllExpensesPaid() {
+    if (!updateExpense) return
+    const outstanding = projExpenses.filter(e => e.status !== 'paid')
+    for (const exp of outstanding) {
+      await updateExpense(exp.id, { status: 'paid' }).catch(() => null)
+    }
+    setMarkAllPaidConfirm(false)
+    toast(`Marked ${outstanding.length} expense${outstanding.length !== 1 ? 's' : ''} as paid`)
+  }
+
+  // ── Delete expense from project tab ──
+  async function handleDeleteExpense(expId: string) {
+    if (expDeleteConfirm !== expId) {
+      setExpDeleteConfirm(expId)
+      setTimeout(() => setExpDeleteConfirm(null), 3000)
+      return
+    }
+    if (deleteExpense) await deleteExpense(expId)
+    else await sb.from('expenses').delete().eq('id', expId)
+    setExpDeleteConfirm(null)
+    toast('Expense deleted', 'error')
+  }
+
+  // ── Bulk create expenses from selected costs ──
+  async function handleBulkCreateExpenses() {
+    setBulkCreating(true)
+    try {
+      const rows = bulkEmpStep === 'one-name'
+        ? Array.from(costSelectedIds).map(id => ({ costId: id, name: bulkEmpName }))
+        : bulkEmpRows
+      for (const row of rows) {
+        if (!row.name.trim()) continue
+        const cost = costs.find(c => c.id === row.costId)
+        if (!cost || cost.expenseId) continue
+        const amount = costTotal(cost)
+        const data: ExpenseInsert = {
+          employee: row.name,
+          date: cost.dueDate ?? todayISO(),
+          entity: project.entity,
+          status: 'submitted',
+          project_code: project.code,
+          project_name: project.name,
+          notes: cost.description,
+          line_items: [{ description: cost.description, category: 'Other', amount }],
+          receipt_urls: cost.receiptUrl ? [cost.receiptUrl] : null,
+          bank_details: null,
+          total: amount,
+        }
+        const created = await createExpense(data)
+        updateCost(row.costId, { expenseId: created.id, isEmployeeCost: true, employeeName: row.name })
+      }
+      toast(`Created ${rows.length} expense${rows.length !== 1 ? 's' : ''}`)
+      setCostSelectedIds(new Set())
+      setBulkEmpStep(null)
+      setBulkEmpName('')
+      setBulkEmpRows([])
+    } catch (e) {
+      toast(`Failed: ${String(e)}`, 'error')
+    } finally {
+      setBulkCreating(false)
     }
   }
 
@@ -918,16 +1105,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       </div>
       <hr/>
       <table>
-        <thead><tr><th>Description</th><th>Category</th><th>Status</th><th class="tr">Estimated</th><th class="tr">Actual</th></tr></thead>
+        <thead><tr><th>Description</th><th>Category</th><th>Status</th><th class="tr">Qty</th><th class="tr">Unit Price</th><th class="tr">Total</th></tr></thead>
         <tbody>
           ${costs.map(c => `<tr>
             <td>${c.description}${c.employeeName ? ` (${c.employeeName})` : ''}</td>
             <td>${c.category}</td>
             <td>${c.status}</td>
+            <td class="tr">${c.qty ?? 1}</td>
             <td class="tr">${fmt(c.estimated)}</td>
-            <td class="tr">${fmt(c.actual)}</td>
+            <td class="tr">${fmt(costTotal(c))}</td>
           </tr>`).join('')}
-          ${costs.length === 0 ? '<tr><td colspan="5" style="color:#9a9a9a;text-align:center;padding:16px">No costs recorded</td></tr>' : ''}
+          ${costs.length === 0 ? '<tr><td colspan="6" style="color:#9a9a9a;text-align:center;padding:16px">No costs recorded</td></tr>' : ''}
         </tbody>
       </table>
       <p class="footer">Generated ${new Date().toLocaleString('en-GB')} · AC Ledger</p>
@@ -1170,7 +1358,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               // Auto-match (skip broken, skip already matched, skip employee costs)
               for (const cost of costs.filter(c => !c.expenseId)) {
                 if (matchedCostIds.has(cost.id)) continue
-                const costAmt = cost.actual || cost.estimated
+                const costAmt = costTotal(cost)
                 for (const inv of payableInvoices) {
                   if (matchedInvIds.has(inv.id)) continue
                   if (reconLinks.broken.some(b => b.costId === cost.id && b.invoiceId === inv.id)) continue
@@ -1214,7 +1402,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
                           <div className="min-w-0 flex-1">
                             <p className="text-xs text-ink truncate">{cost.description}</p>
-                            <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
+                            <p className="font-mono text-[10px] text-muted">{fmt(costTotal(cost))}</p>
                           </div>
                           {cost.receiptUrl && (
                             <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
@@ -1253,7 +1441,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         <div className="w-2 h-2 rounded-full bg-ac-amber flex-shrink-0" />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs text-ink truncate">{cost.description}</p>
-                          <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
+                          <p className="font-mono text-[10px] text-muted">{fmt(costTotal(cost))}</p>
                         </div>
                         {cost.receiptUrl && (
                           <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
@@ -1303,7 +1491,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   className="w-full flex items-start gap-2 px-3 py-2 hover:bg-cream text-left border-b border-rule last:border-0">
                                   <div>
                                     <p className="text-xs text-ink">{cost.description}</p>
-                                    <p className="font-mono text-[10px] text-muted">{fmt(cost.actual || cost.estimated)}</p>
+                                    <p className="font-mono text-[10px] text-muted">{fmt(costTotal(cost))}</p>
                                   </div>
                                 </button>
                               ))}
@@ -1365,107 +1553,211 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         )}
 
         {/* ── Expenses ── */}
-        {tab === 'expenses' && (
-          <div className="p-6">
-            {projExpenses.length === 0 ? (
-              <p className="font-mono text-xs text-muted text-center py-16 uppercase tracking-wider">No expenses for this project</p>
-            ) : (
-              <div className="tbl-card">
-                <div className="divide-y divide-rule">
-                  {projExpenses.map((exp, i) => {
-                    const receipts = exp.receipt_urls ?? []
-                    return (
-                      <div key={exp.id} className={cn('px-4 py-3 group', i % 2 === 1 && 'bg-paper/30')}>
-                        <div className="flex items-start gap-3 flex-wrap">
-                          {/* Main info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-sm font-semibold text-ink">{exp.employee}</span>
-                              <span className="font-mono text-[10px] text-muted">{fmtDate(exp.date)}</span>
-                              <span className={cn('badge', { submitted: 'badge-submitted', approved: 'badge-approved', paid: 'badge-paid' }[exp.status])}>{exp.status}</span>
-                            </div>
-                            {exp.notes && (
-                              <p className="text-xs text-muted mt-0.5 truncate">{exp.notes}</p>
-                            )}
-                            {/* Line items summary */}
-                            {exp.line_items && exp.line_items.length > 0 && (
-                              <div className="flex flex-wrap gap-2 mt-1">
-                                {exp.line_items.map((li, j) => (
-                                  <span key={j} className="font-mono text-[10px] text-muted bg-cream px-1.5 py-0.5">
-                                    {li.description} · {fmt(li.amount)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
+        {tab === 'expenses' && (() => {
+          const expUnpaid = projExpenses.filter(e => e.status !== 'paid')
+          const expPaid = projExpenses.filter(e => e.status === 'paid')
+          const expTotal = projExpenses.reduce((t, e) => t + Number(e.total), 0)
+          const expPaidAmt = expPaid.reduce((t, e) => t + Number(e.total), 0)
+          const expOutstanding = expUnpaid.reduce((t, e) => t + Number(e.total), 0)
+          const paidPct = expTotal > 0 ? (expPaidAmt / expTotal) * 100 : 0
 
-                          {/* Amount */}
-                          <span className="font-mono text-sm font-semibold text-ink whitespace-nowrap">{fmt(exp.total)}</span>
+          // Per-employee breakdown
+          const byEmployee = new Map<string, { total: number; owed: number }>()
+          for (const exp of projExpenses) {
+            const name = exp.employee || 'Unknown'
+            const cur = byEmployee.get(name) ?? { total: 0, owed: 0 }
+            byEmployee.set(name, {
+              total: cur.total + Number(exp.total),
+              owed: cur.owed + (exp.status !== 'paid' ? Number(exp.total) : 0),
+            })
+          }
 
-                          {/* Actions */}
-                          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex-wrap">
-                            {exp.status === 'submitted' && (
-                              <button onClick={() => approveExpense(exp.id)} disabled={approvingExpense === exp.id}
-                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 bg-ac-green text-white hover:opacity-90 disabled:opacity-50 uppercase tracking-wider">
-                                <CheckCircle size={10} /> {approvingExpense === exp.id ? '…' : 'Approve'}
-                              </button>
-                            )}
-                            {updateExpense && (
-                              <button onClick={() => { /* open edit modal */ }} title="Edit"
-                                className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
-                                <Pencil size={10} /> Edit
-                              </button>
-                            )}
-                            <button onClick={() => { setPrintingExpense(exp); setTimeout(() => { window.print(); setPrintingExpense(null) }, 80) }}
-                              title="Reimbursement PDF"
-                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
-                              <Printer size={10} /> PDF
-                            </button>
-                            <button onClick={() => openExpenseReceiptPicker(exp.id)} disabled={addingReceiptExpense === exp.id}
-                              className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50">
-                              <Upload size={10} /> {addingReceiptExpense === exp.id ? '…' : 'Receipt'}
-                            </button>
-                          </div>
-                        </div>
+          const STATUS_CLS: Record<string, string> = { submitted: 'badge-submitted', approved: 'badge-approved', paid: 'badge-paid' }
 
-                        {/* Receipts row */}
-                        {receipts.length > 0 && (
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            {receipts.map((url, j) => {
-                              const isPdf = url.includes('.pdf') || url.includes('pdf')
-                              return (
-                                <button
-                                  key={j}
-                                  onClick={() => isPdf ? window.open(url, '_blank') : setLightboxUrl({ url, name: `Receipt ${j + 1}` })}
-                                  className="border border-rule overflow-hidden hover:opacity-80 transition-opacity"
-                                  title={`Receipt ${j + 1}`}
-                                >
-                                  {isPdf ? (
-                                    <div className="w-10 h-10 flex flex-col items-center justify-center bg-cream gap-0.5">
-                                      <FileText size={12} className="text-muted" />
-                                      <span className="font-mono text-[8px] text-muted">PDF</span>
-                                    </div>
-                                  ) : (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={url} alt={`Receipt ${j + 1}`} className="w-10 h-10 object-cover" />
-                                  )}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
+          function renderExpRow(exp: Expense, idx: number) {
+            const receipts = exp.receipt_urls ?? []
+            return (
+              <div
+                key={exp.id}
+                tabIndex={0}
+                className={cn('px-4 py-3 group focus:outline-none focus:bg-cream/40', idx % 2 === 1 && 'bg-paper/30')}
+                onKeyDown={e => {
+                  if (e.key === 'p' || e.key === 'P') { e.preventDefault(); if (updateExpense) updateExpense(exp.id, { status: 'paid' }).then(() => toast('Marked paid')).catch(() => {}) }
+                  else if (e.key === 'a' || e.key === 'A') { e.preventDefault(); if (updateExpense) updateExpense(exp.id, { status: 'approved' }).then(() => toast('Marked approved')).catch(() => {}) }
+                  else if (e.key === 's' || e.key === 'S') { e.preventDefault(); if (updateExpense) updateExpense(exp.id, { status: 'submitted' }).then(() => toast('Marked submitted')).catch(() => {}) }
+                  else if (e.key === 'Delete') { e.preventDefault(); void handleDeleteExpense(exp.id) }
+                }}
+              >
+                <div className="flex items-start gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-ink">{exp.employee}</span>
+                      <span className="font-mono text-[10px] text-muted">{fmtDate(exp.date)}</span>
+                      {/* Clickable status badge cycles: submitted → approved → paid → submitted */}
+                      <button
+                        onClick={() => void cycleExpenseStatus(exp.id, exp.status)}
+                        title="Click to cycle status (or P/A/S keys when focused)"
+                        className={cn('badge cursor-pointer hover:opacity-75 transition-opacity select-none', STATUS_CLS[exp.status] ?? 'badge-draft')}
+                      >
+                        {exp.status}
+                      </button>
+                    </div>
+                    {exp.notes && <p className="text-xs text-muted mt-0.5 truncate">{exp.notes}</p>}
+                    {exp.line_items && exp.line_items.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {exp.line_items.map((li, j) => (
+                          <span key={j} className="font-mono text-[10px] text-muted bg-cream px-1.5 py-0.5">
+                            {li.description} · {fmt(li.amount)}
+                          </span>
+                        ))}
                       </div>
-                    )
-                  })}
+                    )}
+                  </div>
+
+                  <span className="font-mono text-sm font-semibold text-ink whitespace-nowrap">{fmt(exp.total)}</span>
+
+                  <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex-wrap">
+                    <button onClick={() => { setPrintingExpense(exp); setTimeout(() => { window.print(); setPrintingExpense(null) }, 80) }}
+                      title="Reimbursement PDF"
+                      className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
+                      <Printer size={10} /> PDF
+                    </button>
+                    <button onClick={() => openExpenseReceiptPicker(exp.id)} disabled={addingReceiptExpense === exp.id}
+                      className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors disabled:opacity-50">
+                      <Upload size={10} /> {addingReceiptExpense === exp.id ? '…' : 'Receipt'}
+                    </button>
+                    {updateExpense && (
+                      <button onClick={() => setExpenseEditModal(exp)}
+                        className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
+                        <Pencil size={10} /> Edit
+                      </button>
+                    )}
+                    <button onClick={() => void handleDeleteExpense(exp.id)}
+                      className={cn('flex items-center gap-1 font-mono text-[10px] px-2 py-1 border transition-colors',
+                        expDeleteConfirm === exp.id ? 'border-red-400 text-red-600 bg-red-50' : 'border-rule text-muted hover:text-red-500')}>
+                      <Trash2 size={10} /> {expDeleteConfirm === exp.id ? 'Confirm?' : 'Delete'}
+                    </button>
+                  </div>
                 </div>
-                <div className="px-4 py-2.5 border-t border-rule bg-cream">
-                  <span className="font-mono text-xs text-muted">Total: </span>
-                  <span className="font-mono text-xs font-semibold text-ink">{fmt(totalExpenses)}</span>
-                </div>
+
+                {receipts.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {receipts.map((url, j) => {
+                      const isPdf = url.includes('.pdf') || url.includes('pdf')
+                      return (
+                        <button key={j}
+                          onClick={() => isPdf ? window.open(url, '_blank') : setLightboxUrl({ url, name: `Receipt ${j + 1}` })}
+                          className="border border-rule overflow-hidden hover:opacity-80 transition-opacity" title={`Receipt ${j + 1}`}>
+                          {isPdf ? (
+                            <div className="w-10 h-10 flex flex-col items-center justify-center bg-cream gap-0.5">
+                              <FileText size={12} className="text-muted" />
+                              <span className="font-mono text-[8px] text-muted">PDF</span>
+                            </div>
+                          ) : (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={url} alt={`Receipt ${j + 1}`} className="w-10 h-10 object-cover" />
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
+            )
+          }
+
+          return (
+            <div className="p-6 pb-10">
+              {/* Summary bar */}
+              {projExpenses.length > 0 && (
+                <div className="mb-4 border border-rule bg-cream/60">
+                  <div className="px-4 py-3 flex items-center gap-6 flex-wrap">
+                    <div>
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted mb-0.5">Total</p>
+                      <p className="font-mono text-sm font-semibold text-ink">{fmt(expTotal)}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted mb-0.5">Paid</p>
+                      <p className="font-mono text-sm font-semibold text-ac-green">{fmt(expPaidAmt)}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted mb-0.5">Outstanding</p>
+                      <p className={cn('font-mono text-sm font-semibold', expOutstanding > 0 ? 'text-ac-amber' : 'text-muted')}>{fmt(expOutstanding)}</p>
+                    </div>
+                    <div className="flex-1 min-w-[140px]">
+                      <p className="font-mono text-[9px] uppercase tracking-wider text-muted mb-1">{Math.round(paidPct)}% paid</p>
+                      <div className="h-1.5 bg-rule overflow-hidden">
+                        <div className="h-full bg-ac-green transition-all" style={{ width: `${paidPct}%` }} />
+                      </div>
+                    </div>
+                    <div className="ml-auto">
+                      {markAllPaidConfirm ? (
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-amber-700">Mark {expUnpaid.length} as paid?</span>
+                          <button onClick={handleMarkAllExpensesPaid} className="font-mono text-xs px-2 py-1 bg-ac-green text-white hover:opacity-90">Yes</button>
+                          <button onClick={() => setMarkAllPaidConfirm(false)} className="font-mono text-xs text-muted hover:text-ink">No</button>
+                        </div>
+                      ) : (
+                        expUnpaid.length > 0 && (
+                          <button onClick={() => setMarkAllPaidConfirm(true)}
+                            className="font-mono text-xs px-3 py-1.5 border border-rule text-muted hover:text-ink hover:border-ink transition-colors flex items-center gap-1">
+                            <DollarSign size={10} /> Mark All Paid
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                  {/* Per-employee breakdown */}
+                  {byEmployee.size > 1 && (
+                    <div className="px-4 py-2 border-t border-rule flex flex-wrap gap-4">
+                      {Array.from(byEmployee.entries()).map(([name, data]) => (
+                        <div key={name} className="text-xs">
+                          <span className="font-semibold text-ink">{name}</span>
+                          {data.owed > 0
+                            ? <span className="font-mono text-ac-amber ml-1.5">{fmt(data.owed)} owed</span>
+                            : <span className="font-mono text-muted ml-1.5">all paid</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {projExpenses.length === 0 ? (
+                <p className="font-mono text-xs text-muted text-center py-16 uppercase tracking-wider">No expenses for this project</p>
+              ) : (
+                <div className="tbl-card">
+                  <div className="divide-y divide-rule">
+                    {/* Unpaid pinned to top */}
+                    {expUnpaid.map((exp, i) => renderExpRow(exp, i))}
+                    {/* Paid collapsed section */}
+                    {expPaid.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => setPaidExpCollapsed(c => !c)}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 bg-cream/60 hover:bg-cream transition-colors text-left"
+                        >
+                          {paidExpCollapsed
+                            ? <ChevronRight size={12} className="text-muted flex-shrink-0" />
+                            : <ChevronDown size={12} className="text-muted flex-shrink-0" />}
+                          <span className="font-mono text-xs text-muted uppercase tracking-wider">
+                            Paid ({expPaid.length}) · {fmt(expPaidAmt)}
+                          </span>
+                        </button>
+                        {!paidExpCollapsed && expPaid.map((exp, i) => renderExpRow(exp, i + expUnpaid.length))}
+                      </>
+                    )}
+                  </div>
+                  <div className="px-4 py-2.5 border-t border-rule bg-cream">
+                    <span className="font-mono text-xs text-muted">Total: </span>
+                    <span className="font-mono text-xs font-semibold text-ink">{fmt(totalExpenses)}</span>
+                  </div>
+                </div>
+              )}
+              <p className="font-mono text-[10px] text-muted mt-3">Click status badge to cycle · Focus row for keyboard shortcuts (P=paid, A=approved, S=submitted, Del=delete)</p>
+            </div>
+          )
+        })()}
 
         {/* ── Costs ── */}
         {tab === 'costs' && (
@@ -1538,14 +1830,93 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   <Droppable droppableId="costs">
                     {(provided) => (
                       <div ref={provided.innerRef} {...provided.droppableProps}>
+                        {/* Bulk action bar */}
+                        {costSelectedIds.size > 0 && (
+                          <div className="px-3 py-2 bg-ink text-white flex items-center gap-3 flex-wrap">
+                            <span className="font-mono text-xs">{costSelectedIds.size} selected</span>
+                            {bulkEmpStep === null && (
+                              <button
+                                onClick={() => {
+                                  // only select those not already expenses
+                                  const eligible = Array.from(costSelectedIds).filter(id => !costs.find(c => c.id === id)?.expenseId)
+                                  if (eligible.length === 0) { toast('All selected are already linked to expenses'); return }
+                                  setBulkEmpStep('ask')
+                                }}
+                                className="font-mono text-xs px-2 py-1 bg-white/10 hover:bg-white/20 transition-colors flex items-center gap-1"
+                              >
+                                <User size={10} /> Mark as Employee Expenses
+                              </button>
+                            )}
+                            {bulkEmpStep === 'ask' && (
+                              <>
+                                <span className="font-mono text-xs text-white/80">Assign all to same employee?</span>
+                                <button onClick={() => setBulkEmpStep('one-name')} className="font-mono text-xs px-2 py-1 bg-white/10 hover:bg-white/20">Yes</button>
+                                <button onClick={() => {
+                                  setBulkEmpStep('per-row')
+                                  setBulkEmpRows(Array.from(costSelectedIds).map(id => ({ costId: id, name: '' })))
+                                }} className="font-mono text-xs px-2 py-1 bg-white/10 hover:bg-white/20">No, individually</button>
+                                <button onClick={() => setBulkEmpStep(null)} className="font-mono text-xs text-white/50 hover:text-white">Cancel</button>
+                              </>
+                            )}
+                            {bulkEmpStep === 'one-name' && (
+                              <>
+                                <div className="relative">
+                                  <EmployeeAutocomplete
+                                    value={bulkEmpName}
+                                    onChange={setBulkEmpName}
+                                    allEmployeeNames={allEmployeeNames}
+                                    profiles={employeeProfiles}
+                                  />
+                                </div>
+                                <button
+                                  onClick={handleBulkCreateExpenses}
+                                  disabled={!bulkEmpName.trim() || bulkCreating}
+                                  className="font-mono text-xs px-2 py-1 bg-ac-green text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
+                                >
+                                  <CheckCircle size={10} /> {bulkCreating ? 'Creating…' : 'Create Expenses'}
+                                </button>
+                                <button onClick={() => setBulkEmpStep(null)} className="font-mono text-xs text-white/50 hover:text-white">Cancel</button>
+                              </>
+                            )}
+                            {bulkEmpStep === 'per-row' && (
+                              <>
+                                <span className="font-mono text-xs text-white/70">Enter names below then confirm</span>
+                                <button
+                                  onClick={handleBulkCreateExpenses}
+                                  disabled={bulkEmpRows.some(r => !r.name.trim()) || bulkCreating}
+                                  className="font-mono text-xs px-2 py-1 bg-ac-green text-white hover:opacity-90 disabled:opacity-50"
+                                >
+                                  {bulkCreating ? 'Creating…' : 'Confirm'}
+                                </button>
+                                <button onClick={() => setBulkEmpStep(null)} className="font-mono text-xs text-white/50 hover:text-white">Cancel</button>
+                              </>
+                            )}
+                            <button onClick={() => { setCostSelectedIds(new Set()); setBulkEmpStep(null) }}
+                              className="ml-auto p-1 hover:text-white/60">
+                              <X size={12} />
+                            </button>
+                          </div>
+                        )}
+
                         {/* Column headers */}
                         <div className="flex items-center border-b border-rule bg-paper/50 px-2 py-2">
+                          <div className="w-5 flex-shrink-0 pl-1">
+                            <input type="checkbox"
+                              checked={costSelectedIds.size === costs.length && costs.length > 0}
+                              onChange={() => {
+                                if (costSelectedIds.size === costs.length) setCostSelectedIds(new Set())
+                                else setCostSelectedIds(new Set(costs.map(c => c.id)))
+                              }}
+                              className="w-3 h-3 cursor-pointer"
+                            />
+                          </div>
                           <div className="w-6 flex-shrink-0" />
                           {([
                             { key: 'description' as CostSortKey, label: 'Description', cls: 'flex-1 min-w-0 px-2' },
                             { key: 'category' as CostSortKey, label: 'Category', cls: 'w-24 px-2 hidden sm:block' },
-                            { key: 'estimated' as CostSortKey, label: 'Est.', cls: 'w-20 px-2 text-right hidden md:block' },
-                            { key: 'actual' as CostSortKey, label: 'Actual', cls: 'w-20 px-2 text-right' },
+                            { key: 'qty' as CostSortKey, label: 'Qty', cls: 'w-12 px-2 text-right hidden md:block' },
+                            { key: 'estimated' as CostSortKey, label: 'Unit Price', cls: 'w-24 px-2 text-right hidden md:block' },
+                            { key: 'actual' as CostSortKey, label: 'Total', cls: 'w-24 px-2 text-right' },
                             { key: 'status' as CostSortKey, label: 'Status', cls: 'w-20 px-2 hidden sm:block' },
                           ]).map(col => (
                             <button key={col.key} onClick={() => toggleCostSort(col.key)}
@@ -1575,6 +1946,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   className="flex items-center px-2 py-2.5 cursor-pointer hover:bg-cream/50 transition-colors"
                                   onClick={() => setEditingCost(editingCost === cost.id ? null : cost.id)}
                                 >
+                                  {/* Checkbox */}
+                                  <div className="w-5 flex-shrink-0 pl-1" onClick={e => e.stopPropagation()}>
+                                    <input type="checkbox"
+                                      checked={costSelectedIds.has(cost.id)}
+                                      onChange={() => setCostSelectedIds(prev => {
+                                        const next = new Set(prev)
+                                        next.has(cost.id) ? next.delete(cost.id) : next.add(cost.id)
+                                        return next
+                                      })}
+                                      className="w-3 h-3 cursor-pointer"
+                                    />
+                                  </div>
                                   {/* Drag handle — hidden when sorted */}
                                   <div
                                     {...(costSortKey === null ? provided.dragHandleProps : {})}
@@ -1630,6 +2013,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                     {cost.isEmployeeCost && cost.employeeName && (
                                       <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
                                     )}
+                                    {/* Per-row name input in bulk mode */}
+                                    {bulkEmpStep === 'per-row' && costSelectedIds.has(cost.id) && !cost.expenseId && (
+                                      <div className="mt-1" onClick={e => e.stopPropagation()}>
+                                        <EmployeeAutocomplete
+                                          value={bulkEmpRows.find(r => r.costId === cost.id)?.name ?? ''}
+                                          onChange={name => setBulkEmpRows(rows => rows.map(r => r.costId === cost.id ? { ...r, name } : r))}
+                                          allEmployeeNames={allEmployeeNames}
+                                          profiles={employeeProfiles}
+                                        />
+                                      </div>
+                                    )}
                                     {cost.dueDate && cost.status !== 'paid' && (
                                       <p className={cn('font-mono text-[10px] mt-0.5 flex items-center gap-1',
                                         cost.dueDate < todayISO() ? 'text-red-500' : 'text-muted')}>
@@ -1647,15 +2041,20 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                     <span className="font-mono text-[10px] text-muted uppercase tracking-wider">{cost.category}</span>
                                   </div>
 
-                                  {/* Estimated */}
-                                  <div className="w-20 px-2 text-right hidden md:block">
+                                  {/* Qty */}
+                                  <div className="w-12 px-2 text-right hidden md:block">
+                                    <span className="font-mono text-xs text-muted">{cost.qty ?? 1}</span>
+                                  </div>
+
+                                  {/* Unit Price */}
+                                  <div className="w-24 px-2 text-right hidden md:block">
                                     <span className="font-mono text-xs text-muted">{fmt(cost.estimated)}</span>
                                   </div>
 
-                                  {/* Actual */}
-                                  <div className="w-20 px-2 text-right">
+                                  {/* Total */}
+                                  <div className="w-24 px-2 text-right">
                                     <span className={cn('font-mono text-xs font-semibold', cost.expenseId ? 'text-muted line-through' : 'text-ink')}>
-                                      {fmt(cost.actual)}
+                                      {fmt(costTotal(cost))}
                                     </span>
                                   </div>
 
@@ -1701,7 +2100,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                 {/* Expanded edit panel */}
                                 {editingCost === cost.id && (
                                   <div className="px-4 py-3 bg-cream/60 border-t border-rule space-y-3" onClick={e => e.stopPropagation()}>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
                                       <div className="col-span-2 sm:col-span-3 lg:col-span-2">
                                         <label className="field-label">Description</label>
                                         <input value={cost.description}
@@ -1717,18 +2116,24 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                         </select>
                                       </div>
                                       <div>
-                                        <label className="field-label">Estimated</label>
+                                        <label className="field-label">Qty</label>
+                                        <input type="number" value={cost.qty ?? 1}
+                                          onChange={e => updateCost(cost.id, { qty: Math.max(1, parseInt(e.target.value) || 1) })}
+                                          min="1" step="1"
+                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                      </div>
+                                      <div>
+                                        <label className="field-label">Unit Price</label>
                                         <input type="number" value={cost.estimated}
                                           onChange={e => updateCost(cost.id, { estimated: parseFloat(e.target.value) || 0 })}
                                           min="0" step="0.01"
                                           className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
                                       </div>
                                       <div>
-                                        <label className="field-label">Actual</label>
-                                        <input type="number" value={cost.actual}
-                                          onChange={e => updateCost(cost.id, { actual: parseFloat(e.target.value) || 0 })}
-                                          min="0" step="0.01"
-                                          className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                        <label className="field-label">Total</label>
+                                        <div className="w-full border border-rule bg-cream/80 px-2 py-1 text-xs font-mono text-right text-ink font-semibold">
+                                          {fmt(costTotal(cost))}
+                                        </div>
                                       </div>
                                       <div>
                                         <label className="field-label">Status</label>
@@ -1806,11 +2211,11 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       </button>
                                       {cost.isEmployeeCost && (
                                         <>
-                                          <input
+                                          <EmployeeAutocomplete
                                             value={cost.employeeName ?? ''}
-                                            onChange={e => updateCost(cost.id, { employeeName: e.target.value })}
-                                            placeholder="Employee name"
-                                            className="border border-rule bg-white px-2 py-1 text-xs text-ink focus:outline-none w-40"
+                                            onChange={name => updateCost(cost.id, { employeeName: name })}
+                                            allEmployeeNames={allEmployeeNames}
+                                            profiles={employeeProfiles}
                                           />
                                           {!cost.expenseId ? (
                                             <button
@@ -1998,7 +2403,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         {/* Add cost form */}
                         {addingCost && (
                           <div className="border-t border-rule bg-cream/50 px-4 py-3 space-y-3">
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
                               <div className="col-span-2 sm:col-span-3 lg:col-span-2">
                                 <label className="field-label">Description</label>
                                 <input value={newCost.description}
@@ -2015,18 +2420,24 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                 </select>
                               </div>
                               <div>
-                                <label className="field-label">Estimated</label>
+                                <label className="field-label">Qty</label>
+                                <input type="number" value={newCost.qty ?? 1}
+                                  onChange={e => setNewCost(c => ({ ...c, qty: Math.max(1, parseInt(e.target.value) || 1) }))}
+                                  min="1" step="1" placeholder="1"
+                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                              </div>
+                              <div>
+                                <label className="field-label">Unit Price</label>
                                 <input type="number" value={newCost.estimated || ''}
                                   onChange={e => setNewCost(c => ({ ...c, estimated: parseFloat(e.target.value) || 0 }))}
                                   min="0" step="0.01" placeholder="0.00"
                                   className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
                               </div>
                               <div>
-                                <label className="field-label">Actual</label>
-                                <input type="number" value={newCost.actual || ''}
-                                  onChange={e => setNewCost(c => ({ ...c, actual: parseFloat(e.target.value) || 0 }))}
-                                  min="0" step="0.01" placeholder="0.00"
-                                  className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-right text-ink focus:outline-none" />
+                                <label className="field-label">Total</label>
+                                <div className="w-full border border-rule bg-cream/80 px-2 py-1 text-xs font-mono text-right text-ink font-semibold">
+                                  {fmt(costTotal(newCost))}
+                                </div>
                               </div>
                               <div>
                                 <label className="field-label">Status</label>
@@ -2076,9 +2487,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                     {costs.some(c => c.expenseId) && (
                       <span className="ml-1 opacity-60">· {costs.filter(c => c.expenseId).length} in expenses</span>
                     )}
-                    {' · '}Est: {fmt(costs.reduce((t, c) => t + c.estimated, 0))}
                   </span>
-                  <span className="font-mono text-xs font-semibold text-ink">Actual: {fmt(totalCosts)}</span>
+                  <span className="font-mono text-xs font-semibold text-ink">Total: {fmt(totalCosts)}</span>
                 </div>
               )}
             </div>
@@ -2468,6 +2878,22 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
           await createExpense(data)
           setExpenseModalOpen(false)
           toast('Expense created')
+        }}
+        prefillEmployee={undefined}
+        prefillBank={undefined}
+      />
+
+      {/* Edit expense modal (from expenses tab) */}
+      <ExpenseModal
+        isOpen={!!expenseEditModal}
+        expense={expenseEditModal}
+        onClose={() => setExpenseEditModal(null)}
+        onSave={async (data) => {
+          if (expenseEditModal && updateExpense) {
+            await updateExpense(expenseEditModal.id, data)
+            toast('Expense updated')
+          }
+          setExpenseEditModal(null)
         }}
         prefillEmployee={undefined}
         prefillBank={undefined}

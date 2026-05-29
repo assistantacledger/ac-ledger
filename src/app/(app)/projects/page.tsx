@@ -35,7 +35,7 @@ export default function ProjectsPage() {
   const { config } = useAuth()
   const { projects, createProject, updateProject, renameProjectCode, deleteProject } = useProjects()
   const { invoices, createInvoice, updateInvoice, markPaid } = useInvoices()
-  const { expenses, createExpense, updateExpense } = useExpenses()
+  const { expenses, createExpense, updateExpense, deleteExpense } = useExpenses()
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -199,6 +199,7 @@ export default function ProjectsPage() {
           updateInvoice={updateInvoice}
           markInvoicePaid={markPaid}
           updateExpense={updateExpense}
+          deleteExpense={deleteExpense}
           anthropicKey={config?.anthropicKey}
           projects={projects}
           createProject={createProject}
@@ -297,6 +298,16 @@ export default function ProjectsPage() {
                       <span className="font-mono text-xs text-muted">{stats.count} invoice{stats.count !== 1 ? 's' : ''}</span>
                       <span className="font-mono text-xs text-ac-green">{fmt(stats.paid)} paid</span>
                     </div>
+                    {(() => {
+                      const unpaidExpenses = expenses
+                        .filter(e => e.project_code === project.code && e.status !== 'paid')
+                        .reduce((t, e) => t + Number(e.total), 0)
+                      return unpaidExpenses > 0 ? (
+                        <div className="flex justify-between">
+                          <span className="font-mono text-[10px] text-ac-amber">{fmt(unpaidExpenses)} outstanding expenses</span>
+                        </div>
+                      ) : null
+                    })()}
                     {project.notes && (
                       <p className="text-xs text-muted line-clamp-2">{project.notes}</p>
                     )}

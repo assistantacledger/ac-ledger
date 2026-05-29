@@ -214,8 +214,9 @@ export interface ProjectCost {
   id: string
   description: string
   category: CostCategory
-  estimated: number
-  actual: number
+  qty?: number        // quantity (default 1); total = qty × estimated (unit price)
+  estimated: number  // unit price per item
+  actual: number     // total cost = qty × unit price (auto-set)
   status: CostStatus
   notes: string
   dueDate?: string   // ISO date string — highlights in red if overdue and not paid
