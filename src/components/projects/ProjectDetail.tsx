@@ -204,6 +204,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // Cost sorting (persisted per project)
   const [costSortKey, setCostSortKey] = useState<CostSortKey | null>(null)
   const [costSortDir, setCostSortDir] = useState<'asc' | 'desc'>('asc')
+  // Cost category filter (set by clicking a category in Overview)
+  const [costCategoryFilter, setCostCategoryFilter] = useState<string | null>(null)
   // Reconciliation manual links
   const [reconLinks, setReconLinks] = useState<ReconLinks>(EMPTY_LINKS)
   const [linkingFrom, setLinkingFrom] = useState<{ side: 'cost' | 'invoice'; id: string } | null>(null)
@@ -641,17 +643,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   // ── Combined spending by category (costs + expense line items) ──
   const spendByCategory = useMemo(() => {
-    const map = new Map<string, { spend: number; items: number }>()
+    const map = new Map<string, { spend: number; items: number; hasCosts: boolean; hasExpenses: boolean }>()
     for (const cost of costs.filter(c => !c.expenseId)) {
       const cat = cost.category
-      const cur = map.get(cat) ?? { spend: 0, items: 0 }
-      map.set(cat, { spend: cur.spend + costTotal(cost), items: cur.items + 1 })
+      const cur = map.get(cat) ?? { spend: 0, items: 0, hasCosts: false, hasExpenses: false }
+      map.set(cat, { spend: cur.spend + costTotal(cost), items: cur.items + 1, hasCosts: true, hasExpenses: cur.hasExpenses })
     }
     for (const exp of projExpenses) {
       for (const item of (exp.line_items ?? [])) {
         const cat = item.category
-        const cur = map.get(cat) ?? { spend: 0, items: 0 }
-        map.set(cat, { spend: cur.spend + Number(item.amount), items: cur.items + 1 })
+        const cur = map.get(cat) ?? { spend: 0, items: 0, hasCosts: false, hasExpenses: false }
+        map.set(cat, { spend: cur.spend + Number(item.amount), items: cur.items + 1, hasCosts: cur.hasCosts, hasExpenses: true })
       }
     }
     return map
@@ -889,20 +891,24 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     return costSortDir === 'asc' ? <ChevronUp size={9} className="ml-0.5" /> : <ChevronDown size={9} className="ml-0.5" />
   }
 
-  const displayCosts = costSortKey === null ? costs : [...costs].sort((a, b) => {
-    let av: string | number = '', bv: string | number = ''
-    if (costSortKey === 'description') { av = a.description; bv = b.description }
-    else if (costSortKey === 'category') { av = a.category; bv = b.category }
-    else if (costSortKey === 'qty') { av = a.qty ?? 1; bv = b.qty ?? 1 }
-    else if (costSortKey === 'estimated') { av = a.estimated; bv = b.estimated }
-    else if (costSortKey === 'actual') { av = costTotal(a); bv = costTotal(b) }
-    else if (costSortKey === 'status') { av = a.status; bv = b.status }
-    else if (costSortKey === 'dueDate') { av = a.dueDate ?? ''; bv = b.dueDate ?? '' }
-    else if (costSortKey === 'hasInvoice') { av = a.expenseId ? 1 : 0; bv = b.expenseId ? 1 : 0 }
-    if (av < bv) return costSortDir === 'asc' ? -1 : 1
-    if (av > bv) return costSortDir === 'asc' ? 1 : -1
-    return 0
-  })
+  const displayCosts = (() => {
+    let rows = costSortKey === null ? costs : [...costs].sort((a, b) => {
+      let av: string | number = '', bv: string | number = ''
+      if (costSortKey === 'description') { av = a.description; bv = b.description }
+      else if (costSortKey === 'category') { av = a.category; bv = b.category }
+      else if (costSortKey === 'qty') { av = a.qty ?? 1; bv = b.qty ?? 1 }
+      else if (costSortKey === 'estimated') { av = a.estimated; bv = b.estimated }
+      else if (costSortKey === 'actual') { av = costTotal(a); bv = costTotal(b) }
+      else if (costSortKey === 'status') { av = a.status; bv = b.status }
+      else if (costSortKey === 'dueDate') { av = a.dueDate ?? ''; bv = b.dueDate ?? '' }
+      else if (costSortKey === 'hasInvoice') { av = a.expenseId ? 1 : 0; bv = b.expenseId ? 1 : 0 }
+      if (av < bv) return costSortDir === 'asc' ? -1 : 1
+      if (av > bv) return costSortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    if (costCategoryFilter) rows = rows.filter(c => c.category === costCategoryFilter)
+    return rows
+  })()
 
   // ── Reconciliation links ──
   function saveReconLinks(next: ReconLinks) {
@@ -1337,6 +1343,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   <thead>
                     <tr className="bg-cream border-b border-rule">
                       <th className="tbl-lbl text-left px-4 py-2.5">Category</th>
+                      <th className="tbl-lbl text-left px-4 py-2.5 w-28">Source</th>
                       <th className="tbl-lbl text-right px-4 py-2.5 w-16">Items</th>
                       <th className="tbl-lbl text-right px-4 py-2.5 w-32">Total Spent</th>
                       {project.budget > 0 && <th className="tbl-lbl text-right px-4 py-2.5 w-24">% of Budget</th>}
@@ -1345,22 +1352,38 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   <tbody>
                     {Array.from(spendByCategory.entries())
                       .sort((a, b) => b[1].spend - a[1].spend)
-                      .map(([cat, { spend, items }]) => (
-                        <tr key={cat} className="border-b border-rule last:border-0 hover:bg-cream/40 transition-colors">
-                          <td className="px-4 py-2.5 text-sm text-ink">{cat}</td>
-                          <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">{items}</td>
-                          <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold text-ink">{fmt(spend)}</td>
-                          {project.budget > 0 && (
-                            <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
-                              {(spend / project.budget * 100).toFixed(1)}%
+                      .map(([cat, { spend, items, hasCosts, hasExpenses }]) => {
+                        const sourceLabel = hasCosts && hasExpenses ? 'Costs + Expenses' : hasCosts ? 'Costs only' : 'Expenses only'
+                        const sourceCls = hasCosts && hasExpenses ? 'text-purple-600' : hasCosts ? 'text-ink' : 'text-blue-600'
+                        return (
+                          <tr
+                            key={cat}
+                            className="border-b border-rule last:border-0 hover:bg-amber-50 transition-colors cursor-pointer group"
+                            title={`Click to filter Costs tab to "${cat}"`}
+                            onClick={() => { setCostCategoryFilter(cat); setTab('costs') }}
+                          >
+                            <td className="px-4 py-2.5 text-sm text-ink group-hover:font-semibold transition-all">
+                              {cat}
+                              <span className="ml-2 font-mono text-[9px] text-muted opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-wider">→ filter</span>
                             </td>
-                          )}
-                        </tr>
-                      ))}
+                            <td className="px-4 py-2.5">
+                              <span className={`font-mono text-[10px] uppercase tracking-wider ${sourceCls}`}>{sourceLabel}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">{items}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold text-ink">{fmt(spend)}</td>
+                            {project.budget > 0 && (
+                              <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
+                                {(spend / project.budget * 100).toFixed(1)}%
+                              </td>
+                            )}
+                          </tr>
+                        )
+                      })}
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-ink bg-paper/60">
                       <td className="px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider">Total</td>
+                      <td />
                       <td className="px-4 py-2.5 text-right font-mono text-xs font-semibold">
                         {Array.from(spendByCategory.values()).reduce((t, v) => t + v.items, 0)}
                       </td>
@@ -1885,11 +1908,26 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 </div>
               )}
 
+              {costCategoryFilter && (
+                <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+                  <span className="font-mono text-xs text-amber-800">
+                    Filtering by category: <span className="font-semibold">{costCategoryFilter}</span>
+                    {' '}· {displayCosts.length} of {costs.length} items
+                  </span>
+                  <button
+                    onClick={() => setCostCategoryFilter(null)}
+                    className="ml-auto font-mono text-[10px] text-amber-700 hover:text-amber-900 flex items-center gap-1 transition-colors"
+                  >
+                    <X size={10} /> Clear filter
+                  </button>
+                </div>
+              )}
+
               {costs.length === 0 && !addingCost ? (
                 <p className="font-mono text-xs text-muted text-center py-12 uppercase tracking-wider">No costs yet</p>
               ) : (
-                <DragDropContext onDragEnd={handleDragEnd}>
-                  <Droppable droppableId="costs">
+                <DragDropContext onDragEnd={costCategoryFilter ? () => {} : handleDragEnd}>
+                  <Droppable droppableId="costs" isDropDisabled={!!costCategoryFilter}>
                     {(provided) => (
                       <div ref={provided.innerRef} {...provided.droppableProps}>
                         {/* Bulk action bar */}
@@ -2543,14 +2581,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               )}
 
               {costs.length > 0 && (
-                <div className="px-4 py-2.5 border-t border-rule bg-cream flex items-center justify-between">
-                  <span className="font-mono text-xs text-muted">
-                    {costs.length} line{costs.length !== 1 ? 's' : ''}
-                    {costs.some(c => c.expenseId) && (
-                      <span className="ml-1 opacity-60">· {costs.filter(c => c.expenseId).length} in expenses</span>
-                    )}
-                  </span>
-                  <span className="font-mono text-xs font-semibold text-ink">Total: {fmt(totalCosts)}</span>
+                <div className="border-t-2 border-ink bg-cream">
+                  <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+                    <span className="font-mono text-xs text-muted">
+                      {costs.length} line{costs.length !== 1 ? 's' : ''}
+                      {costs.some(c => c.expenseId) && (
+                        <span className="ml-1 opacity-60">· {costs.filter(c => c.expenseId).length} linked to expenses</span>
+                      )}
+                    </span>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="font-mono text-xs text-muted">Direct costs: <span className="text-ink font-semibold">{fmt(totalCosts)}</span></span>
+                      <span className="font-mono text-[10px] text-muted">·</span>
+                      <span className="font-mono text-xs text-muted">Expenses: <span className="text-ink font-semibold">{fmt(totalExpenses)}</span></span>
+                      <span className="font-mono text-[10px] text-muted">·</span>
+                      <span className="font-mono text-xs font-bold text-ink">Combined total: {fmt(totalSpend)}</span>
+                    </div>
+                  </div>
+                  <div className="px-4 pb-2.5">
+                    <p className="font-mono text-[10px] text-muted italic">Overview total includes both direct costs and employee expenses</p>
+                  </div>
                 </div>
               )}
             </div>
