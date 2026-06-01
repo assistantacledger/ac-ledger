@@ -8,7 +8,7 @@ import { fetchInvoices, fetchExpenses, autoMarkOverdue, sb } from '@/lib/supabas
 import { fmt, fmtDate, daysOverdue } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import type { Invoice, Expense } from '@/types'
-import { TrendingUp, TrendingDown, AlertCircle, Scale, Clock, ArrowRight, Eye, CheckCircle } from 'lucide-react'
+import { TrendingUp, TrendingDown, AlertCircle, Scale, Clock, ArrowRight, Eye, CheckCircle, X } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/format'
 
@@ -59,11 +59,29 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState<Invoice | null>(null)
+  const [payNoteInvoice, setPayNoteInvoice] = useState<Invoice | null>(null)
+  const [payNoteRef, setPayNoteRef] = useState('')
 
-  async function markPaidInline(id: string) {
-    await sb.from('invoices').update({ status: 'paid' }).eq('id', id)
-    setInvoices(prev => prev.map(i => i.id === id ? { ...i, status: 'paid' as const } : i))
+  async function markPaidInline(id: string, paymentRef?: string) {
+    const inv = invoices.find(i => i.id === id)
+    let newNotes = inv?.notes ?? null
+    if (paymentRef?.trim()) {
+      newNotes = `Payment ref: ${paymentRef.trim()}${newNotes ? `\n${newNotes}` : ''}`
+    }
+    await sb.from('invoices').update({ status: 'paid', notes: newNotes }).eq('id', id)
+    setInvoices(prev => prev.map(i => i.id === id ? { ...i, status: 'paid' as const, notes: newNotes } : i))
     toast('Marked paid')
+  }
+
+  function promptMarkPaid(inv: Invoice) {
+    setPayNoteRef('')
+    setPayNoteInvoice(inv)
+  }
+
+  async function confirmMarkPaid() {
+    if (!payNoteInvoice) return
+    await markPaidInline(payNoteInvoice.id, payNoteRef)
+    setPayNoteInvoice(null)
   }
 
   useEffect(() => {
@@ -124,9 +142,57 @@ export default function DashboardPage() {
     .sort((a, b) => (a.due! > b.due! ? 1 : -1))
     .slice(0, 5)
 
+  // Sort overdue by most overdue first (earliest due date)
+  const overdueChase = [...overdue].sort((a, b) =>
+    (a.due ?? '') < (b.due ?? '') ? -1 : 1
+  )
+
   return (
     <>
       <InvoicePreviewModal invoice={previewing} onClose={() => setPreviewing(null)} />
+
+      {/* Payment reference dialog */}
+      {payNoteInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white border border-rule shadow-xl w-80">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-rule">
+              <p className="font-mono text-xs uppercase tracking-wider text-ink">Mark as Paid</p>
+              <button onClick={() => setPayNoteInvoice(null)} className="text-muted hover:text-ink">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-ink mb-1">{payNoteInvoice.party}</p>
+              <p className="font-mono text-xs text-muted mb-4">{payNoteInvoice.ref} · {fmt(payNoteInvoice.amount, payNoteInvoice.currency)}</p>
+              <label className="field-label">Payment Reference <span className="normal-case text-muted">(optional)</span></label>
+              <input
+                autoFocus
+                type="text"
+                value={payNoteRef}
+                onChange={e => setPayNoteRef(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && void confirmMarkPaid()}
+                placeholder="e.g. bank transfer ref, cheque no."
+                className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink mt-1"
+              />
+            </div>
+            <div className="flex gap-2 px-5 pb-4">
+              <button
+                onClick={() => setPayNoteInvoice(null)}
+                className="flex-1 px-3 py-2 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void confirmMarkPaid()}
+                className="flex-1 px-3 py-2 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:bg-ac-green/90 transition-colors"
+              >
+                Mark Paid
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Header title="Dashboard" />
 
       <main className="flex-1 overflow-y-auto px-6 py-6">
@@ -167,6 +233,73 @@ export default function DashboardPage() {
             icon={<Scale size={16} />}
           />
         </div>
+
+        {/* ── Overdue Chase List ───────────────────────────────────────── */}
+        {!loading && overdueChase.length > 0 && (
+          <div className="mb-6 tbl-card" style={{ borderTopColor: '#dc2626', borderTopWidth: 3 }}>
+            <div className="tbl-hd">
+              <div className="flex items-center gap-2">
+                <AlertCircle size={13} className="text-red-500" />
+                <p className="tbl-lbl text-red-600">Overdue — Action Required</p>
+              </div>
+              <span className="font-mono text-xs text-red-500">
+                {overdueChase.length} invoice{overdueChase.length !== 1 ? 's' : ''} · {fmt(totalOverdue)}
+              </span>
+            </div>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-rule bg-red-50/30">
+                  <th className="tbl-lbl text-left px-5 py-2.5">Overdue</th>
+                  <th className="tbl-lbl text-left px-3 py-2.5">Party</th>
+                  <th className="tbl-lbl text-left px-3 py-2.5">Ref</th>
+                  <th className="tbl-lbl text-left px-3 py-2.5 hidden md:table-cell">Project</th>
+                  <th className="tbl-lbl text-left px-3 py-2.5 hidden lg:table-cell">Entity</th>
+                  <th className="tbl-lbl text-right px-5 py-2.5">Amount</th>
+                  <th className="w-28 px-3 py-2.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {overdueChase.map(inv => (
+                  <tr key={inv.id} className="border-b border-rule last:border-0 hover:bg-red-50/30 transition-colors group">
+                    <td className="px-5 py-2.5">
+                      <span className="font-mono text-xs font-semibold text-red-600">
+                        +{daysOverdue(inv.due!)}d
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-sm text-ink font-medium max-w-[160px] truncate">{inv.party}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-muted">{inv.ref || '—'}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-muted hidden md:table-cell">
+                      {inv.project_code ?? '—'}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-[10px] text-muted hidden lg:table-cell truncate">
+                      {inv.entity}
+                    </td>
+                    <td className="px-5 py-2.5 text-sm font-semibold text-right text-red-600 whitespace-nowrap">
+                      {fmt(inv.amount, inv.currency)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="row-actions justify-end opacity-0 group-hover:opacity-100 gap-1">
+                        <button
+                          onClick={() => setPreviewing(inv)}
+                          title="View"
+                          className="p-1 text-muted hover:text-ink transition-colors"
+                        >
+                          <Eye size={12} />
+                        </button>
+                        <button
+                          onClick={() => promptMarkPaid(inv)}
+                          className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono uppercase tracking-wider bg-ac-green text-white hover:bg-ac-green/80 transition-colors whitespace-nowrap"
+                        >
+                          <CheckCircle size={9} /> Mark Paid
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           {/* ── Recent Invoices ──────────────────────────────────────── */}
@@ -231,7 +364,7 @@ export default function DashboardPage() {
                         <div className="row-actions justify-end opacity-0 group-hover:opacity-100">
                           <button onClick={() => setPreviewing(inv)} title="View PDF" className="p-1 text-muted hover:text-ink transition-colors"><Eye size={12} /></button>
                           {inv.status !== 'paid' && (
-                            <button onClick={() => markPaidInline(inv.id)} title="Mark paid" className="p-1 text-muted hover:text-ac-green transition-colors"><CheckCircle size={12} /></button>
+                            <button onClick={() => promptMarkPaid(inv)} title="Mark paid" className="p-1 text-muted hover:text-ac-green transition-colors"><CheckCircle size={12} /></button>
                           )}
                         </div>
                       </td>

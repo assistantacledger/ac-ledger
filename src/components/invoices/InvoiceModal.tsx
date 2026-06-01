@@ -12,16 +12,32 @@ const STATUSES: InvoiceStatus[] = [
 ]
 
 const CURRENCIES = ['£', '$', '€']
+const PAYMENT_METHODS = ['Bank Transfer', 'Wise', 'Card', 'Cash', 'Other']
 
-interface InvoiceModalProps {
-  isOpen: boolean
-  onClose: () => void
-  invoice?: Invoice | null
-  existingInvoices: Invoice[]
-  defaultType?: 'payable' | 'receivable'
-  defaultValues?: Partial<InvoiceInsert>
-  onSave: (data: InvoiceInsert) => Promise<void>
+// ─── Invoice metadata stored in internal field ───────────────────────────────
+// Format: ||{"v":20,"pm":"Bank Transfer","pa":500}||\nRest of notes
+// v  = vat rate (0 = explicitly off, >0 = on at that %)
+// pm = payment method
+// pa = paid amount so far (for part-paid)
+
+interface InvMeta { v?: number; pm?: string; pa?: number }
+
+function parseMeta(internal: string | null): { meta: InvMeta; text: string } {
+  if (!internal) return { meta: {}, text: '' }
+  const m = internal.match(/^\|\|(.+?)\|\|\n?([\s\S]*)$/)
+  if (m) {
+    try { return { meta: JSON.parse(m[1]) as InvMeta, text: m[2] } } catch { /* */ }
+  }
+  return { meta: {}, text: internal }
 }
+
+function buildInternal(meta: InvMeta, text: string): string | null {
+  const hasMeta = Object.keys(meta).length > 0
+  if (!hasMeta) return text || null
+  return `||${JSON.stringify(meta)}||\n${text}`
+}
+
+// ─── Form helpers ─────────────────────────────────────────────────────────────
 
 const blankLine = (): LineItem => ({ description: '', qty: 1, unit: 0, total: 0 })
 
@@ -67,6 +83,16 @@ function fromInvoice(inv: Invoice): InvoiceInsert {
   }
 }
 
+interface InvoiceModalProps {
+  isOpen: boolean
+  onClose: () => void
+  invoice?: Invoice | null
+  existingInvoices: Invoice[]
+  defaultType?: 'payable' | 'receivable'
+  defaultValues?: Partial<InvoiceInsert>
+  onSave: (data: InvoiceInsert) => Promise<void>
+}
+
 export function InvoiceModal({
   isOpen, onClose, invoice, existingInvoices, defaultType = 'payable', defaultValues, onSave,
 }: InvoiceModalProps) {
@@ -78,10 +104,28 @@ export function InvoiceModal({
   const [scheduleEnabled, setScheduleEnabled] = useState(false)
   const [refWarn, setRefWarn] = useState(false)
 
+  // Extra fields stored in internal meta
+  const [vatEnabled, setVatEnabled] = useState(false)
+  const [vatRate, setVatRate] = useState(20)
+  const [paymentMethod, setPaymentMethod] = useState('')
+  const [partPaidAmount, setPartPaidAmount] = useState(0)
+  const [internalNotes, setInternalNotes] = useState('')
+
   useEffect(() => {
     if (isOpen) {
       const base = invoice ? fromInvoice(invoice) : emptyForm(defaultType)
-      setForm(defaultValues && !invoice ? { ...base, ...defaultValues } : base)
+      const merged = defaultValues && !invoice ? { ...base, ...defaultValues } : base
+
+      // Parse meta from internal field
+      const { meta, text } = parseMeta(merged.internal)
+      setVatEnabled(meta.v !== undefined && meta.v > 0)
+      setVatRate(meta.v && meta.v > 0 ? meta.v : 20)
+      setPaymentMethod(meta.pm ?? '')
+      setPartPaidAmount(meta.pa ?? 0)
+      setInternalNotes(text)
+
+      // Store form without internal (we manage it via internalNotes state)
+      setForm({ ...merged, internal: null })
       setError(null)
       setSaving(false)
       setRefWarn(false)
@@ -91,6 +135,8 @@ export function InvoiceModal({
 
   // Recompute total from line items whenever they change
   const lineTotal = (form.line_items ?? []).reduce((t, l) => t + Number(l.total), 0)
+  const vatAmt = vatEnabled ? parseFloat((lineTotal * vatRate / 100).toFixed(2)) : 0
+  const grandTotal = lineTotal > 0 ? lineTotal + vatAmt : form.amount
 
   function set<K extends keyof InvoiceInsert>(key: K, val: InvoiceInsert[K]) {
     setForm(f => ({ ...f, [key]: val }))
@@ -111,7 +157,6 @@ export function InvoiceModal({
     }
     lines[idx] = line
     set('line_items', lines)
-    // Sync amount to line total
     const total = lines.reduce((t, l) => t + Number(l.total), 0)
     set('amount', parseFloat(total.toFixed(2)))
   }
@@ -133,6 +178,12 @@ export function InvoiceModal({
       : 'RTW'
     const ref = getNextRef(existingInvoices, form.entity, prefix)
     set('ref', ref)
+  }
+
+  function setDueDatePreset(days: number) {
+    const d = new Date()
+    d.setDate(d.getDate() + days)
+    set('due', d.toISOString().split('T')[0])
   }
 
   // Payment schedule helpers
@@ -157,7 +208,7 @@ export function InvoiceModal({
     set('payment_schedule', (form.payment_schedule ?? []).filter((_, i) => i !== idx))
   }
 
-  async function handleSave(force = false) {
+  async function handleSave(force = false, statusOverride?: InvoiceStatus) {
     if (!form.party.trim()) { setError('Party is required'); return }
     if (!form.ref.trim()) { setError('Ref / invoice number is required'); return }
 
@@ -174,8 +225,24 @@ export function InvoiceModal({
     setError(null)
     setSaving(true)
     try {
+      // Build internal with meta
+      const meta: InvMeta = {}
+      meta.v = vatEnabled ? vatRate : 0  // always write v so PDF knows the intent
+      if (paymentMethod) meta.pm = paymentMethod
+      if (partPaidAmount > 0) meta.pa = partPaidAmount
+      const internalField = buildInternal(meta, internalNotes)
+
+      // Compute VAT-inclusive amount
+      const vatAmount = vatEnabled ? parseFloat((lineTotal * vatRate / 100).toFixed(2)) : 0
+      const totalAmount = lineTotal > 0
+        ? parseFloat((lineTotal + vatAmount).toFixed(2))
+        : form.amount
+
       const data: InvoiceInsert = {
         ...form,
+        status: statusOverride ?? form.status,
+        amount: totalAmount,
+        internal: internalField,
         payment_schedule: scheduleEnabled ? form.payment_schedule : null,
       }
       await onSave(data)
@@ -207,6 +274,13 @@ export function InvoiceModal({
         Cancel
       </button>
       <button
+        onClick={() => handleSave(false, 'draft')}
+        disabled={saving}
+        className="px-4 py-2 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors disabled:opacity-50"
+      >
+        Save as Draft
+      </button>
+      <button
         onClick={() => handleSave(false)}
         disabled={saving}
         className="px-4 py-2 text-xs font-mono uppercase tracking-wider bg-ink text-white hover:bg-[#333] transition-colors disabled:opacity-50"
@@ -235,7 +309,7 @@ export function InvoiceModal({
           {/* Party */}
           <div className="col-span-2">
             <label className="field-label">
-              {form.type === 'payable' ? 'Payee / Supplier' : 'Client / Billto'}
+              {form.type === 'payable' ? 'Payee / Supplier' : 'Client / Bill to'}
             </label>
             <input
               type="text"
@@ -305,6 +379,35 @@ export function InvoiceModal({
             </select>
           </div>
 
+          {/* Part-paid amount — shown when status is part-paid */}
+          {form.status === 'part-paid' && (
+            <div className="col-span-2 bg-amber-50 border border-amber-200 px-4 py-3 flex items-center gap-4">
+              <div className="flex-1">
+                <label className="field-label text-amber-800">Amount Paid So Far</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="font-mono text-sm text-muted">{form.currency}</span>
+                  <input
+                    type="number"
+                    value={partPaidAmount || ''}
+                    onChange={e => setPartPaidAmount(parseFloat(e.target.value) || 0)}
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    className="w-36 border border-amber-300 bg-white px-3 py-1.5 text-sm font-mono text-ink focus:outline-none focus:border-amber-600"
+                  />
+                </div>
+              </div>
+              {partPaidAmount > 0 && (
+                <div className="text-right">
+                  <p className="font-mono text-xs text-muted uppercase tracking-wider">Remaining</p>
+                  <p className="font-mono text-sm font-semibold text-amber-800">
+                    {fmt(Math.max(0, grandTotal - partPaidAmount), form.currency)}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Currency */}
           <div>
             <label className="field-label">Currency</label>
@@ -317,6 +420,19 @@ export function InvoiceModal({
             </select>
           </div>
 
+          {/* Payment Method */}
+          <div>
+            <label className="field-label">Payment Method</label>
+            <select
+              value={paymentMethod}
+              onChange={e => setPaymentMethod(e.target.value)}
+              className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink font-mono"
+            >
+              <option value="">— Not specified —</option>
+              {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+
           {/* Due date */}
           <div>
             <label className="field-label">Due Date</label>
@@ -326,6 +442,28 @@ export function InvoiceModal({
               onChange={e => set('due', e.target.value || null)}
               className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink"
             />
+            {/* Quick presets */}
+            <div className="flex gap-1 mt-1.5">
+              {[7, 14, 30, 60].map(days => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setDueDatePreset(days)}
+                  className="px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
+                >
+                  +{days}d
+                </button>
+              ))}
+              {form.due && (
+                <button
+                  type="button"
+                  onClick={() => set('due', null)}
+                  className="px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-red-500 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Project code */}
@@ -440,16 +578,71 @@ export function InvoiceModal({
             </table>
           </div>
 
+          {/* VAT toggle — prominent band */}
+          <div className={cn(
+            'mt-3 border px-4 py-3 flex items-center gap-4 transition-colors',
+            vatEnabled ? 'border-ink bg-ink/5' : 'border-rule bg-cream'
+          )}>
+            <button
+              type="button"
+              onClick={() => setVatEnabled(v => !v)}
+              className="flex items-center gap-3 group"
+            >
+              {/* Toggle switch */}
+              <div className={cn(
+                'relative w-9 h-5 transition-colors flex-shrink-0',
+                vatEnabled ? 'bg-ink' : 'bg-[#ccc]'
+              )}>
+                <div className={cn(
+                  'absolute top-0.5 w-4 h-4 bg-white shadow transition-transform',
+                  vatEnabled ? 'left-[18px]' : 'left-0.5'
+                )} />
+              </div>
+              <span className={cn(
+                'font-mono text-xs font-semibold uppercase tracking-wider',
+                vatEnabled ? 'text-ink' : 'text-muted'
+              )}>
+                VAT
+              </span>
+            </button>
+
+            {vatEnabled ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={vatRate}
+                  onChange={e => setVatRate(parseFloat(e.target.value) || 0)}
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  className="w-16 border border-ink bg-white px-2 py-1 text-sm font-mono text-ink focus:outline-none text-right"
+                />
+                <span className="font-mono text-xs text-muted">%</span>
+                <span className="font-mono text-xs text-muted ml-2">= {fmt(vatAmt, form.currency)}</span>
+              </div>
+            ) : (
+              <span className="font-mono text-xs text-muted">No VAT — toggle on to add</span>
+            )}
+          </div>
+
           {/* Totals */}
           <div className="mt-3 flex justify-end">
             <div className="text-right space-y-1">
-              <div className="flex items-center gap-6">
-                <span className="font-mono text-xs text-muted uppercase tracking-wider">Subtotal</span>
-                <span className="font-mono text-sm text-ink w-24 text-right">{fmt(lineTotal, form.currency)}</span>
-              </div>
+              {lineTotal > 0 && (
+                <div className="flex items-center gap-6">
+                  <span className="font-mono text-xs text-muted uppercase tracking-wider">Subtotal</span>
+                  <span className="font-mono text-sm text-ink w-24 text-right">{fmt(lineTotal, form.currency)}</span>
+                </div>
+              )}
+              {vatEnabled && vatAmt > 0 && (
+                <div className="flex items-center gap-6">
+                  <span className="font-mono text-xs text-muted uppercase tracking-wider">VAT ({vatRate}%)</span>
+                  <span className="font-mono text-sm text-muted w-24 text-right">{fmt(vatAmt, form.currency)}</span>
+                </div>
+              )}
               <div className="flex items-center gap-6 border-t border-rule pt-1">
                 <span className="font-mono text-xs font-semibold uppercase tracking-wider">Total</span>
-                <span className="font-mono text-sm font-semibold text-ink w-24 text-right">{fmt(form.amount, form.currency)}</span>
+                <span className="font-mono text-sm font-semibold text-ink w-24 text-right">{fmt(grandTotal, form.currency)}</span>
               </div>
             </div>
           </div>
@@ -490,8 +683,8 @@ export function InvoiceModal({
           <div>
             <label className="field-label">Internal Notes <span className="normal-case">(not shown on invoice)</span></label>
             <textarea
-              value={form.internal ?? ''}
-              onChange={e => set('internal', e.target.value || null)}
+              value={internalNotes}
+              onChange={e => setInternalNotes(e.target.value)}
               rows={3}
               placeholder="Internal reminders, context, etc."
               className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink resize-none"

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { ToastContainer } from '@/components/ui/ToastContainer'
+import { FloatingActionButton } from '@/components/layout/FloatingActionButton'
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, config } = useAuth()
@@ -46,6 +47,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {children}
       </div>
       <ToastContainer />
+      <FloatingActionButton />
     </div>
   )
 }

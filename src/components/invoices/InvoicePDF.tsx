@@ -9,10 +9,23 @@ interface InvoicePDFProps {
   forPrint?: boolean
 }
 
+// Parse per-invoice VAT from the internal field meta prefix
+function parseInvVat(internal: string | null): number | undefined {
+  if (!internal) return undefined
+  const m = internal.match(/^\|\|(.+?)\|\|/)
+  if (m) {
+    try { return (JSON.parse(m[1]) as { v?: number }).v } catch { /* */ }
+  }
+  return undefined
+}
+
 export function InvoicePDF({ invoice, company, forPrint = false }: InvoicePDFProps) {
   const lines = invoice.line_items ?? []
   const subtotal = lines.reduce((t, l) => t + Number(l.total), 0)
-  const vatRate = parseFloat(company?.vat ?? '0') || 0
+  // Per-invoice VAT override takes precedence over company setting
+  // invVat=0 means explicitly no VAT; invVat=undefined means fall back to company
+  const invVat = parseInvVat(invoice.internal)
+  const vatRate = invVat !== undefined ? invVat : (parseFloat(company?.vat ?? '0') || 0)
   const vatAmt = vatRate ? parseFloat((subtotal * vatRate / 100).toFixed(2)) : 0
   const total = vatRate ? subtotal + vatAmt : invoice.amount
 
