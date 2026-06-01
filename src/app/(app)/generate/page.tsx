@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Header } from '@/components/layout/Header'
 import { InvoicePDF } from '@/components/invoices/InvoicePDF'
+import { printViaNewWindow } from '@/lib/print'
 import { Modal } from '@/components/ui/Modal'
 import { useInvoices } from '@/hooks/useInvoices'
 import { useTemplates } from '@/hooks/useTemplates'
@@ -65,6 +66,7 @@ export default function GeneratePage() {
   const [assigning, setAssigning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const previewRef = useRef<HTMLDivElement>(null)
+  const invoicePrintRef = useRef<HTMLDivElement>(null)
   const [previewScale, setPreviewScale] = useState(0.5)
   const [templateModalOpen, setTemplateModalOpen] = useState(false)
   const [templateName, setTemplateName] = useState('')
@@ -206,7 +208,9 @@ export default function GeneratePage() {
   }
 
   function handlePrint() {
-    window.print()
+    if (invoicePrintRef.current) {
+      printViaNewWindow(invoicePrintRef.current, `Invoice ${form.ref || 'Preview'}`)
+    }
   }
 
   function handleReset() {
@@ -252,8 +256,8 @@ export default function GeneratePage() {
     <>
       <Header title="Generate Invoice" />
 
-      {/* Hidden full-size invoice for window.print() — never shown on screen */}
-      <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+      {/* Hidden full-size invoice for printing — never shown on screen */}
+      <div ref={invoicePrintRef} style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
         <InvoicePDF invoice={previewInvoice} company={company} forPrint={true} />
       </div>
 

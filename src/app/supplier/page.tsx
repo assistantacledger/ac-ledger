@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, todayISO } from '@/lib/format'
+import { printViaNewWindow } from '@/lib/print'
 import { Plus, Trash2, CheckCircle, Printer } from 'lucide-react'
 import type { Entity, InvoiceInsert, ExpenseInsert, ExpenseLineItem, LineItem, BankDetails } from '@/types'
 import { ENTITIES } from '@/types'
@@ -198,7 +199,7 @@ function SupplierFormInner() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => window.print()}
+              onClick={() => { const el = document.getElementById('supplier-receipt'); if (el) printViaNewWindow(el, 'Submission Receipt') }}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-rule font-mono text-xs uppercase tracking-wider text-muted hover:text-ink hover:border-ink transition-colors"
             >
               <Printer size={12} /> Print Receipt

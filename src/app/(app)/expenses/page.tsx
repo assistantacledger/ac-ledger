@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/layout/Header'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
@@ -12,6 +12,7 @@ import { useExpenses } from '@/hooks/useExpenses'
 import { useEmployeeProfiles } from '@/hooks/useEmployeeProfiles'
 import { cn, fmt, fmtDate } from '@/lib/format'
 import { toast } from '@/lib/toast'
+import { printViaNewWindow } from '@/lib/print'
 import {
   Plus, Search, CheckCircle, DollarSign, Pencil, Trash2,
   FileText, ChevronDown, ChevronRight, User, ArrowUpDown, ArrowUp, ArrowDown,
@@ -44,6 +45,7 @@ export default function ExpensesPage() {
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [printing, setPrinting] = useState<Expense | null>(null)
+  const printRef = useRef<HTMLDivElement>(null)
   const [preview, setPreview] = useState<{ url: string; name?: string } | null>(null)
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
   const [invoiceSelector, setInvoiceSelector] = useState<{ name: string; exps: Expense[] } | null>(null)
@@ -330,7 +332,10 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
 
   function handlePrint(exp: Expense) {
     setPrinting(exp)
-    setTimeout(() => { window.print(); setPrinting(null) }, 80)
+    setTimeout(() => {
+      if (printRef.current) printViaNewWindow(printRef.current, `Expense - ${exp.employee}`)
+      setPrinting(null)
+    }, 300)
   }
 
   function openNewForProfile(name: string) {
@@ -359,7 +364,7 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
   return (
     <>
       {printing && (
-        <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+        <div ref={printRef} style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
           <ExpenseReimbursePDF expense={printing} forPrint={true} />
         </div>
       )}

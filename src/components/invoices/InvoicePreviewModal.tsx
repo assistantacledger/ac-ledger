@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { X, Printer } from 'lucide-react'
 import { InvoicePDF } from './InvoicePDF'
 import { fmtDate } from '@/lib/format'
+import { printViaNewWindow } from '@/lib/print'
 import type { Invoice, CompanySettings, Entity } from '@/types'
 import { ENTITY_STORAGE_KEYS } from '@/types'
 
@@ -21,6 +22,7 @@ function loadCompany(entity: Entity): CompanySettings | null {
 
 export function InvoicePreviewModal({ invoice, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const printRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(0.75)
   const [company, setCompany] = useState<CompanySettings | null>(null)
 
@@ -66,6 +68,7 @@ export function InvoicePreviewModal({ invoice, onClose }: Props) {
           Must be OUTSIDE the scaled preview div (transforms trap fixed children).
           position: absolute here, print CSS overrides to position: fixed.      */}
       <div
+        ref={printRef}
         aria-hidden
         style={{ position: 'absolute', left: -9999, top: 0, width: 794, pointerEvents: 'none', overflow: 'hidden' }}
       >
@@ -86,7 +89,7 @@ export function InvoicePreviewModal({ invoice, onClose }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => window.print()}
+            onClick={() => printRef.current && printViaNewWindow(printRef.current, `${label} ${invoice.ref || ''}`)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider bg-white text-ink hover:bg-cream transition-colors"
           >
             <Printer size={11} /> Print / Download PDF

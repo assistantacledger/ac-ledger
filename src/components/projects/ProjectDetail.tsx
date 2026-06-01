@@ -12,10 +12,12 @@ import {
 import { PaymentSheet } from './PaymentSheet'
 import { ProjectImport } from './ProjectImport'
 import { ProjectInvoicesTab } from './ProjectInvoicesTab'
+import { ProjectWhiteboard } from './ProjectWhiteboard'
 import { FilePreviewOverlay } from '@/components/ui/FilePreviewOverlay'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { toast } from '@/lib/toast'
+import { printViaNewWindow } from '@/lib/print'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal'
 import { ExpenseModal } from '@/components/expenses/ExpenseModal'
@@ -89,7 +91,7 @@ function EmployeeAutocomplete({ value, onChange, allEmployeeNames, profiles }: {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'invoices' | 'expenses' | 'costs' | 'payment-sheet' | 'files-notes'
+type Tab = 'overview' | 'invoices' | 'expenses' | 'costs' | 'payment-sheet' | 'files-notes' | 'whiteboard'
 
 const COST_CATEGORIES: CostCategory[] = ['Equipment', 'Travel', 'Crew', 'Talent', 'Venue', 'Software', 'Marketing', 'Other']
 const COST_STATUSES: CostStatus[] = ['planned', 'confirmed', 'paid']
@@ -217,6 +219,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [lightboxUrl, setLightboxUrl] = useState<{ url: string; name: string } | null>(null)
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const expPrintRef = useRef<HTMLDivElement>(null)
 
   // Costs
   const [costs, setCosts] = useState<ProjectCost[]>([])
@@ -1197,6 +1200,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     { key: 'costs',          label: `Costs (${costs.length})` },
     { key: 'payment-sheet',  label: `Payment Sheet${payableCount > 0 ? ` (${payableCount})` : ''}` },
     { key: 'files-notes',    label: `Files & Notes (${files.length + notes.length})` },
+    { key: 'whiteboard',     label: 'Whiteboard' },
   ]
 
   return (
@@ -1262,7 +1266,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={tab === 'whiteboard' ? 'flex-1 overflow-hidden flex flex-col' : 'flex-1 overflow-y-auto'}>
 
         {/* ── Overview ── */}
         {tab === 'overview' && (
@@ -1675,7 +1679,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   <span className="font-mono text-sm font-semibold text-ink whitespace-nowrap">{fmt(exp.total)}</span>
 
                   <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex-wrap">
-                    <button onClick={() => { setPrintingExpense(exp); setTimeout(() => { window.print(); setPrintingExpense(null) }, 80) }}
+                    <button onClick={() => { setPrintingExpense(exp); setTimeout(() => { if (expPrintRef.current) printViaNewWindow(expPrintRef.current, `Expense - ${exp.employee}`); setPrintingExpense(null) }, 300) }}
                       title="Reimbursement PDF"
                       className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink transition-colors">
                       <Printer size={10} /> PDF
@@ -2876,6 +2880,11 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
             </div>
           </div>
         )}
+
+        {/* ── Whiteboard ── */}
+        {tab === 'whiteboard' && (
+          <ProjectWhiteboard projectCode={project.code} />
+        )}
       </div>
 
       {/* File preview overlay */}
@@ -2885,7 +2894,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
       {/* Expense reimbursement print (off-screen) */}
       {printingExpense && (
-        <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
+        <div ref={expPrintRef} style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }} aria-hidden>
           <ExpenseReimbursePDF expense={printingExpense} forPrint={true} />
         </div>
       )}
@@ -3009,7 +3018,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               <p className="font-mono text-xs text-white/50">Management Summary · {project.name}</p>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => { const el = document.getElementById('proj-summary-content'); if (el) printViaNewWindow(el, `Management Summary · ${project.name}`) }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-white text-ink text-xs font-mono uppercase tracking-wider hover:bg-cream transition-colors"
                 >
                   <Printer size={11} /> Print / Save PDF
