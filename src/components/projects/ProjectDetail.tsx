@@ -243,6 +243,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [expDeleteConfirm, setExpDeleteConfirm] = useState<string | null>(null)
   const [markAllPaidConfirm, setMarkAllPaidConfirm] = useState(false)
   const [expenseEditModal, setExpenseEditModal] = useState<Expense | null>(null)
+  // Summary PDF overlay
+  const [showSummaryPDF, setShowSummaryPDF] = useState(false)
+
   // Costs bulk selection
   const [costSelectedIds, setCostSelectedIds] = useState<Set<string>>(new Set())
   const [bulkEmpStep, setBulkEmpStep] = useState<'ask' | 'one-name' | 'per-row' | null>(null)
@@ -627,13 +630,29 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   }, [expenses, employeeProfiles])
 
   // ── Financial summary ──
-  const totalBillable = projInvoices.filter(i => i.type === 'receivable').reduce((t, i) => t + Number(i.amount), 0)
-  const totalCollected = projInvoices.filter(i => i.type === 'receivable' && i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
-  const totalOutgoings = projInvoices.filter(i => i.type === 'payable').reduce((t, i) => t + Number(i.amount), 0)
   const totalExpenses = projExpenses.reduce((t, e) => t + Number(e.total), 0)
-  // Exclude employee costs that have been promoted to Supabase expenses (avoid double-counting)
+  // Exclude employee costs promoted to Supabase expenses (avoid double-counting)
   const totalCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + costTotal(c), 0)
-  const netPosition = totalBillable - totalOutgoings - totalExpenses - totalCosts
+  // Total spend = direct costs + employee expenses
+  const totalSpend = totalCosts + totalExpenses
+
+  // ── Combined spending by category (costs + expense line items) ──
+  const spendByCategory = useMemo(() => {
+    const map = new Map<string, { spend: number; items: number }>()
+    for (const cost of costs.filter(c => !c.expenseId)) {
+      const cat = cost.category
+      const cur = map.get(cat) ?? { spend: 0, items: 0 }
+      map.set(cat, { spend: cur.spend + costTotal(cost), items: cur.items + 1 })
+    }
+    for (const exp of projExpenses) {
+      for (const item of (exp.line_items ?? [])) {
+        const cat = item.category
+        const cur = map.get(cat) ?? { spend: 0, items: 0 }
+        map.set(cat, { spend: cur.spend + Number(item.amount), items: cur.items + 1 })
+      }
+    }
+    return map
+  }, [costs, projExpenses])
 
   // ── Delete project ──
   function handleDeleteProject() {
@@ -1056,73 +1075,45 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     }
   }
 
-  // ── Print financial summary ──
-  function printSummary() {
-    const totalOutgoingsAll = totalOutgoings + totalExpenses + totalCosts
-    const el = document.createElement('div')
-    el.id = '__proj_summary__'
-    el.innerHTML = `
-      <style>
-        @media print {
-          body > *:not(#__proj_summary__) { display: none !important; }
-          #__proj_summary__ { display: block !important; }
+  // ── Summary PDF overlay ──
+  useEffect(() => {
+    if (!showSummaryPDF) return
+    const style = document.createElement('style')
+    style.id = '__proj-summary-print-css__'
+    style.textContent = `
+      @media print {
+        html, body { height: auto !important; overflow: visible !important; }
+        body > * { display: none !important; }
+        #proj-summary-print-root {
+          display: flex !important;
+          flex-direction: column !important;
+          position: fixed !important;
+          inset: 0 !important;
+          z-index: 9999 !important;
+          background: white !important;
+          overflow: visible !important;
         }
-        #__proj_summary__ {
-          font-family: 'JetBrains Mono', monospace;
-          padding: 40px;
-          max-width: 794px;
-          margin: 0 auto;
-          color: #1a1a1a;
+        #proj-summary-print-root * { visibility: visible !important; }
+        .no-print { display: none !important; }
+        #proj-summary-content {
+          width: 100% !important;
+          max-width: 100% !important;
+          margin: 0 !important;
+          box-shadow: none !important;
+          padding: 24mm !important;
+          page-break-inside: avoid;
         }
-        #__proj_summary__ h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px 0; font-family: 'Outfit', sans-serif; }
-        #__proj_summary__ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin: 0 0 24px 0; font-weight: 400; }
-        #__proj_summary__ .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }
-        #__proj_summary__ .stat { border: 1px solid #e2e2e0; padding: 12px 14px; }
-        #__proj_summary__ .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: #9a9a9a; }
-        #__proj_summary__ .stat-val { font-size: 18px; font-weight: 700; margin-top: 4px; }
-        #__proj_summary__ .net-positive { color: #3a7a5a; }
-        #__proj_summary__ .net-negative { color: #c0392b; }
-        #__proj_summary__ table { width: 100%; border-collapse: collapse; font-size: 11px; }
-        #__proj_summary__ th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #9a9a9a; border-bottom: 1px solid #1a1a1a; padding: 6px 8px; }
-        #__proj_summary__ td { padding: 6px 8px; border-bottom: 1px solid #e2e2e0; }
-        #__proj_summary__ .tr { text-align: right; }
-        #__proj_summary__ hr { border: none; border-top: 2px solid #1a1a1a; margin: 20px 0 16px; }
-        #__proj_summary__ .footer { font-size: 9px; color: #9a9a9a; margin-top: 32px; }
-      </style>
-      <h1>${project.name}</h1>
-      <h2>${project.code} · ${project.entity} · ${fmtDate(project.date)}</h2>
-      <div class="summary-grid">
-        <div class="stat"><div class="stat-label">Budget</div><div class="stat-val">${project.budget > 0 ? fmt(project.budget) : '—'}</div></div>
-        <div class="stat"><div class="stat-label">Total Billable</div><div class="stat-val">${fmt(totalBillable)}</div></div>
-        <div class="stat"><div class="stat-label">Collected</div><div class="stat-val">${fmt(totalCollected)}</div></div>
-        <div class="stat"><div class="stat-label">Payable Invoices</div><div class="stat-val">${fmt(totalOutgoings)}</div></div>
-        <div class="stat"><div class="stat-label">Expenses</div><div class="stat-val">${fmt(totalExpenses)}</div></div>
-        <div class="stat"><div class="stat-label">Direct Costs</div><div class="stat-val">${fmt(totalCosts)}</div></div>
-      </div>
-      <div class="stat" style="margin-bottom:24px">
-        <div class="stat-label">Net Position (Billable − All Outgoings)</div>
-        <div class="stat-val ${netPosition >= 0 ? 'net-positive' : 'net-negative'}">${fmt(netPosition)}</div>
-      </div>
-      <hr/>
-      <table>
-        <thead><tr><th>Description</th><th>Category</th><th>Status</th><th class="tr">Qty</th><th class="tr">Unit Price</th><th class="tr">Total</th></tr></thead>
-        <tbody>
-          ${costs.map(c => `<tr>
-            <td>${c.description}${c.employeeName ? ` (${c.employeeName})` : ''}</td>
-            <td>${c.category}</td>
-            <td>${c.status}</td>
-            <td class="tr">${c.qty ?? 1}</td>
-            <td class="tr">${fmt(c.estimated)}</td>
-            <td class="tr">${fmt(costTotal(c))}</td>
-          </tr>`).join('')}
-          ${costs.length === 0 ? '<tr><td colspan="6" style="color:#9a9a9a;text-align:center;padding:16px">No costs recorded</td></tr>' : ''}
-        </tbody>
-      </table>
-      <p class="footer">Generated ${new Date().toLocaleString('en-GB')} · AC Ledger</p>
+      }
     `
-    document.body.appendChild(el)
-    window.print()
-    setTimeout(() => document.body.removeChild(el), 1000)
+    document.head.appendChild(style)
+    return () => {
+      const el = document.getElementById('__proj-summary-print-css__')
+      if (el) el.remove()
+    }
+  }, [showSummaryPDF])
+
+  function openSummaryPDF() {
+    setShowSummaryPDF(true)
   }
 
   // ── PDF scan in files tab ──
@@ -1276,43 +1267,110 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         {/* ── Overview ── */}
         {tab === 'overview' && (
           <div className="px-6 py-6 space-y-6">
-            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-              {[
-                { label: 'Billable', val: totalBillable, sub: `${fmt(totalCollected)} collected`, color: 'before:bg-ac-green' },
-                { label: 'Outgoings', val: totalOutgoings, sub: 'payable invoices', color: 'before:bg-ac-amber' },
-                { label: 'Expenses', val: totalExpenses, sub: `${projExpenses.length} claim${projExpenses.length !== 1 ? 's' : ''}`, color: 'before:bg-blue-500' },
-                { label: 'Costs', val: totalCosts, sub: `${costs.filter(c => !c.expenseId).length} direct`, color: 'before:bg-purple-500' },
-                {
-                  label: 'Net Position', val: netPosition,
-                  sub: netPosition >= 0 ? 'surplus' : 'deficit',
-                  color: netPosition >= 0 ? 'before:bg-ac-green' : 'before:bg-red-500',
-                },
-              ].map(({ label, val, sub, color }) => (
-                <div key={label} className={cn('stat-card', color)}>
-                  <p className="tbl-lbl mb-1">{label}</p>
-                  <p className={cn('font-mono text-lg font-semibold', val < 0 ? 'text-red-600' : 'text-ink')}>{fmt(val)}</p>
-                  <p className="font-mono text-[10px] text-muted mt-0.5">{sub}</p>
-                </div>
-              ))}
-            </div>
 
-            {project.budget > 0 && (
-              <div className="bg-white border border-rule p-4">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="tbl-lbl">Budget</span>
-                  <span className="font-mono text-xs">
-                    <span className={totalBillable > project.budget ? 'text-red-600 font-semibold' : 'text-ink'}>{fmt(totalBillable)}</span>
-                    <span className="text-muted"> / {fmt(project.budget)}</span>
-                  </span>
+            {/* ── Budget / spend summary ── */}
+            {project.budget > 0 ? (
+              <div className="bg-white border border-rule p-5">
+                <div className="flex items-start justify-between mb-5">
+                  <div>
+                    <p className="tbl-lbl mb-1.5">Total Spend</p>
+                    <p className="font-mono text-3xl font-bold text-ink leading-none">{fmt(totalSpend)}</p>
+                    <p className="font-mono text-xs text-muted mt-1.5">
+                      of {fmt(project.budget)} budget
+                      {totalSpend > 0 && <span> · {fmt(totalCosts)} costs · {fmt(totalExpenses)} expenses</span>}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    {totalSpend > project.budget ? (
+                      <>
+                        <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-1">Over Budget</p>
+                        <p className="font-mono text-xl font-bold text-red-600">{fmt(totalSpend - project.budget)}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-1">Remaining</p>
+                        <p className="font-mono text-xl font-bold text-ac-green">{fmt(project.budget - totalSpend)}</p>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="h-2 bg-rule overflow-hidden">
+                <div className="h-3 bg-rule overflow-hidden mb-1.5">
                   <div
-                    className={cn('h-full transition-all', totalBillable > project.budget ? 'bg-red-500' : 'bg-ac-green')}
-                    style={{ width: `${Math.min((totalBillable / project.budget) * 100, 100)}%` }}
+                    className={cn('h-full transition-all',
+                      totalSpend > project.budget ? 'bg-red-500'
+                      : totalSpend / project.budget >= 0.75 ? 'bg-ac-amber'
+                      : 'bg-ac-green'
+                    )}
+                    style={{ width: `${Math.min(totalSpend / project.budget * 100, 100)}%` }}
                   />
                 </div>
+                <p className="font-mono text-[10px] text-muted">
+                  {project.budget > 0 ? (totalSpend / project.budget * 100).toFixed(1) : '0'}% used
+                </p>
               </div>
-            )}
+            ) : totalSpend > 0 ? (
+              <div className="bg-white border border-rule px-5 py-4 flex items-center justify-between">
+                <p className="tbl-lbl">Total Spend</p>
+                <div className="text-right">
+                  <p className="font-mono text-xl font-bold text-ink">{fmt(totalSpend)}</p>
+                  <p className="font-mono text-[10px] text-muted">{fmt(totalCosts)} costs · {fmt(totalExpenses)} expenses</p>
+                </div>
+              </div>
+            ) : null}
+
+            {/* ── Spending by category ── */}
+            <div className="bg-white border border-rule">
+              <div className="px-4 py-3 border-b border-rule flex items-center justify-between">
+                <p className="tbl-lbl">Spending by Category</p>
+                <p className="font-mono text-xs text-muted">{fmt(totalSpend)} total</p>
+              </div>
+              {spendByCategory.size === 0 ? (
+                <div className="px-5 py-10 text-center">
+                  <p className="font-mono text-xs text-muted">No spending recorded yet — add costs or expenses</p>
+                </div>
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-cream border-b border-rule">
+                      <th className="tbl-lbl text-left px-4 py-2.5">Category</th>
+                      <th className="tbl-lbl text-right px-4 py-2.5 w-16">Items</th>
+                      <th className="tbl-lbl text-right px-4 py-2.5 w-32">Total Spent</th>
+                      {project.budget > 0 && <th className="tbl-lbl text-right px-4 py-2.5 w-24">% of Budget</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(spendByCategory.entries())
+                      .sort((a, b) => b[1].spend - a[1].spend)
+                      .map(([cat, { spend, items }]) => (
+                        <tr key={cat} className="border-b border-rule last:border-0 hover:bg-cream/40 transition-colors">
+                          <td className="px-4 py-2.5 text-sm text-ink">{cat}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">{items}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-sm font-semibold text-ink">{fmt(spend)}</td>
+                          {project.budget > 0 && (
+                            <td className="px-4 py-2.5 text-right font-mono text-xs text-muted">
+                              {(spend / project.budget * 100).toFixed(1)}%
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-ink bg-paper/60">
+                      <td className="px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider">Total</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs font-semibold">
+                        {Array.from(spendByCategory.values()).reduce((t, v) => t + v.items, 0)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-ink">{fmt(totalSpend)}</td>
+                      {project.budget > 0 && (
+                        <td className="px-4 py-2.5 text-right font-mono text-xs font-bold">
+                          {(totalSpend / project.budget * 100).toFixed(1)}%
+                        </td>
+                      )}
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
 
             <div className="bg-white border border-rule p-4">
               <p className="tbl-lbl mb-3">Project Details</p>
@@ -1531,9 +1589,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               >
                 <Upload size={11} /> Import Data
               </button>
-              <button onClick={printSummary}
+              <button onClick={openSummaryPDF}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
-                <Download size={11} /> Export Summary PDF
+                <Printer size={11} /> Export Summary PDF
               </button>
             </div>
           </div>
@@ -2911,12 +2969,235 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
           defaultProjectCode={project.code}
           onProjectCreated={code => {
             setImportOpen(false)
-            // If they created a new project rather than adding to this one, just toast
             if (code !== project.code) toast(`Project ${code} created`)
             else toast('Data imported')
           }}
         />
       )}
+
+      {/* ── Management Summary PDF Overlay ── */}
+      {showSummaryPDF && (() => {
+        const budgetPct = project.budget > 0 ? totalSpend / project.budget * 100 : 0
+        const remaining = project.budget - totalSpend
+        const isOver = totalSpend > project.budget
+        const barW = Math.min(budgetPct, 100)
+        const barColor = isOver ? '#dc2626' : budgetPct >= 75 ? '#7a6a3a' : '#3a7a5a'
+
+        // Group costs by category
+        const costsByCategory = new Map<string, typeof costs>()
+        for (const cat of COST_CATEGORIES) {
+          const cats = costs.filter(c => !c.expenseId && c.category === cat)
+          if (cats.length > 0) costsByCategory.set(cat, cats)
+        }
+
+        // Group expenses by employee
+        const expByEmployee = new Map<string, Expense[]>()
+        for (const exp of projExpenses) {
+          const name = exp.employee || 'Unknown'
+          const arr = expByEmployee.get(name) ?? []
+          arr.push(exp)
+          expByEmployee.set(name, arr)
+        }
+
+        return (
+          <div
+            id="proj-summary-print-root"
+            className="fixed inset-0 z-[80] flex flex-col bg-black/80"
+          >
+            {/* Toolbar */}
+            <div className="no-print flex-shrink-0 flex items-center justify-between px-6 py-3 bg-[#111]">
+              <p className="font-mono text-xs text-white/50">Management Summary · {project.name}</p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-white text-ink text-xs font-mono uppercase tracking-wider hover:bg-cream transition-colors"
+                >
+                  <Printer size={11} /> Print / Save PDF
+                </button>
+                <button
+                  onClick={() => setShowSummaryPDF(false)}
+                  className="text-white/50 hover:text-white transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable preview area */}
+            <div className="flex-1 overflow-y-auto py-8 flex justify-center print:py-0 print:overflow-visible print:block">
+              <div
+                id="proj-summary-content"
+                style={{
+                  width: 794, background: 'white', color: '#1a1a1a',
+                  fontFamily: 'Outfit, sans-serif', fontSize: 12,
+                  padding: 48, boxSizing: 'border-box', minHeight: 1123,
+                }}
+              >
+                {/* HEADER */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+                  <div>
+                    <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, color: '#9a9a9a', marginBottom: 8 }}>
+                      Management Summary
+                    </p>
+                    <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: -0.3, lineHeight: 1.15 }}>{project.name}</h1>
+                    <p style={{ fontFamily: 'monospace', fontSize: 10, color: '#9a9a9a', marginTop: 6 }}>
+                      {project.code} · {project.entity} · Generated {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </p>
+                  </div>
+                  <div style={{
+                    fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.2,
+                    padding: '5px 12px', background: project.status === 'active' ? '#3a7a5a' : project.status === 'completed' ? '#1a1a1a' : '#7a6a3a',
+                    color: 'white', alignSelf: 'flex-start', marginTop: 6,
+                  }}>
+                    {project.status}
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '2px solid #1a1a1a', marginBottom: 24 }} />
+
+                {/* BUDGET OVERVIEW */}
+                {project.budget > 0 && (
+                  <div style={{ background: '#f8f8f6', border: '1px solid #e2e2e0', padding: 20, marginBottom: 24 }}>
+                    <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, color: '#9a9a9a', marginBottom: 14 }}>Budget Overview</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+                      {[
+                        { label: 'Total Budget', val: fmt(project.budget), color: '#1a1a1a' },
+                        { label: 'Total Spent', val: fmt(totalSpend), color: isOver ? '#dc2626' : '#1a1a1a' },
+                        { label: isOver ? 'Over Budget' : 'Remaining', val: fmt(Math.abs(remaining)), color: isOver ? '#dc2626' : '#3a7a5a' },
+                      ].map(({ label, val, color }) => (
+                        <div key={label}>
+                          <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', marginBottom: 4 }}>{label}</p>
+                          <p style={{ fontSize: 20, fontWeight: 700, color, margin: 0 }}>{val}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ height: 10, background: '#e2e2e0', overflow: 'hidden', marginBottom: 6 }}>
+                      <div style={{ height: '100%', width: `${barW}%`, background: barColor }} />
+                    </div>
+                    <p style={{ fontFamily: 'monospace', fontSize: 9, color: '#9a9a9a', margin: 0 }}>
+                      {budgetPct.toFixed(1)}% of budget used
+                    </p>
+                  </div>
+                )}
+
+                {/* COST BREAKDOWN BY CATEGORY */}
+                {costsByCategory.size > 0 && (
+                  <div style={{ marginBottom: 24 }}>
+                    <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, color: '#9a9a9a', marginBottom: 10 }}>Cost Breakdown</p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1.5px solid #1a1a1a' }}>
+                          <th style={{ textAlign: 'left', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 8px 6px 0', fontWeight: 500 }}>Description</th>
+                          <th style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 0 6px 8px', fontWeight: 500, width: 30 }}>Qty</th>
+                          <th style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 0 6px 8px', fontWeight: 500, width: 80 }}>Unit</th>
+                          <th style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 0 6px 8px', fontWeight: 500, width: 80 }}>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(costsByCategory.entries()).map(([cat, items]) => {
+                          const catTotal = items.reduce((t, c) => t + costTotal(c), 0)
+                          return (
+                            <>
+                              <tr key={`cat-${cat}`} style={{ background: '#f8f8f6' }}>
+                                <td colSpan={3} style={{ padding: '8px 0 4px', fontWeight: 700, fontSize: 11 }}>{cat}</td>
+                                <td style={{ textAlign: 'right', padding: '8px 0 4px', fontWeight: 700, fontFamily: 'monospace', fontSize: 11 }}>{fmt(catTotal)}</td>
+                              </tr>
+                              {items.map(c => (
+                                <tr key={c.id} style={{ borderBottom: '1px solid #e2e2e0' }}>
+                                  <td style={{ padding: '5px 8px 5px 12px', color: '#4a4a4a' }}>
+                                    {c.description}{c.employeeName ? ` (${c.employeeName})` : ''}
+                                  </td>
+                                  <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace', color: '#6a6a6a' }}>{c.qty ?? 1}</td>
+                                  <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace', color: '#6a6a6a' }}>{fmt(c.estimated)}</td>
+                                  <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace' }}>{fmt(costTotal(c))}</td>
+                                </tr>
+                              ))}
+                            </>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* EXPENSES BY EMPLOYEE */}
+                {projExpenses.length > 0 && (
+                  <div style={{ marginBottom: 24 }}>
+                    <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, color: '#9a9a9a', marginBottom: 10 }}>Employee Expenses</p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1.5px solid #1a1a1a' }}>
+                          <th style={{ textAlign: 'left', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 8px 6px 0', fontWeight: 500 }}>Employee / Description</th>
+                          <th style={{ textAlign: 'left', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 8px 6px', fontWeight: 500, width: 60 }}>Date</th>
+                          <th style={{ textAlign: 'left', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 8px 6px', fontWeight: 500, width: 70 }}>Status</th>
+                          <th style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1, color: '#9a9a9a', padding: '0 0 6px 8px', fontWeight: 500, width: 80 }}>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(expByEmployee.entries()).map(([name, exps]) => {
+                          const empTotal = exps.reduce((t, e) => t + Number(e.total), 0)
+                          const allPaid = exps.every(e => e.status === 'paid')
+                          return (
+                            <>
+                              <tr key={`emp-${name}`} style={{ background: '#f8f8f6' }}>
+                                <td colSpan={2} style={{ padding: '8px 0 4px', fontWeight: 700, fontSize: 11 }}>{name}</td>
+                                <td style={{ padding: '8px 8px 4px', fontFamily: 'monospace', fontSize: 9, color: allPaid ? '#3a7a5a' : '#7a6a3a', textTransform: 'uppercase' }}>
+                                  {allPaid ? 'Paid' : 'Outstanding'}
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '8px 0 4px', fontWeight: 700, fontFamily: 'monospace', fontSize: 11 }}>{fmt(empTotal)}</td>
+                              </tr>
+                              {exps.map(exp => (
+                                <tr key={exp.id} style={{ borderBottom: '1px solid #e2e2e0' }}>
+                                  <td style={{ padding: '5px 8px 5px 12px', color: '#4a4a4a' }}>
+                                    {exp.notes || exp.line_items?.map(l => l.description).join(', ') || '—'}
+                                  </td>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace', fontSize: 10, color: '#9a9a9a' }}>{fmtDate(exp.date)}</td>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', color: exp.status === 'paid' ? '#3a7a5a' : '#7a6a3a' }}>{exp.status}</td>
+                                  <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace' }}>{fmt(exp.total)}</td>
+                                </tr>
+                              ))}
+                            </>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* SUMMARY BOX */}
+                <div style={{ borderTop: '2px solid #1a1a1a', paddingTop: 16, marginTop: 8 }}>
+                  <p style={{ fontFamily: 'monospace', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, color: '#9a9a9a', marginBottom: 12 }}>Summary</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px 32px', fontSize: 12 }}>
+                    <span style={{ color: '#4a4a4a' }}>Direct Costs</span>
+                    <span style={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 600 }}>{fmt(totalCosts)}</span>
+                    <span style={{ color: '#4a4a4a' }}>Employee Expenses</span>
+                    <span style={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 600 }}>{fmt(totalExpenses)}</span>
+                    <span style={{ borderTop: '1px solid #e2e2e0', paddingTop: 8, fontWeight: 700 }}>Combined Total</span>
+                    <span style={{ borderTop: '1px solid #e2e2e0', paddingTop: 8, fontFamily: 'monospace', textAlign: 'right', fontWeight: 700 }}>{fmt(totalSpend)}</span>
+                    {project.budget > 0 && (
+                      <>
+                        <span style={{ color: '#4a4a4a' }}>Budget</span>
+                        <span style={{ fontFamily: 'monospace', textAlign: 'right' }}>{fmt(project.budget)}</span>
+                        <span style={{ color: isOver ? '#dc2626' : '#3a7a5a', fontWeight: 700 }}>
+                          {isOver ? 'Over Budget by' : 'Under Budget by'}
+                        </span>
+                        <span style={{ fontFamily: 'monospace', textAlign: 'right', fontWeight: 700, color: isOver ? '#dc2626' : '#3a7a5a' }}>
+                          {fmt(Math.abs(remaining))}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <p style={{ fontFamily: 'monospace', fontSize: 9, color: '#9a9a9a', marginTop: 32, borderTop: '1px solid #e2e2e0', paddingTop: 12 }}>
+                  Generated {new Date().toLocaleString('en-GB')} · AC Ledger
+                </p>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

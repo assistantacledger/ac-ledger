@@ -144,32 +144,19 @@ export default function ProjectsPage() {
   }, [projects, entityFilter, statusFilter])
 
   function projectStats(code: string) {
-    const inv = invoices.filter(i => i.project_code === code)
-    const receivable = inv.filter(i => i.type === 'receivable').reduce((t, i) => t + Number(i.amount), 0)
-    const paid = inv.filter(i => i.type === 'receivable' && i.status === 'paid').reduce((t, i) => t + Number(i.amount), 0)
-    const payable = inv.filter(i => i.type === 'payable').reduce((t, i) => t + Number(i.amount), 0)
-    const projExpenses = expenses.filter(e => e.project_code === code).reduce((t, e) => t + Number(e.total), 0)
-    // Costs from localStorage
-    let costTotal = 0
+    // Direct costs from localStorage (excluding those promoted to expenses)
+    let directCosts = 0
     try {
       const raw = localStorage.getItem(`project_costs_${code}`)
       if (raw) {
-        const costs = JSON.parse(raw) as Array<{ actual: number; estimated: number; expenseId?: string }>
-        costTotal = costs.filter(c => !c.expenseId).reduce((t, c) => t + Number(c.actual || c.estimated), 0)
+        const costs = JSON.parse(raw) as Array<{ qty?: number; estimated: number; actual: number; expenseId?: string }>
+        directCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + (c.qty ?? 1) * c.estimated, 0)
       }
     } catch { /* ignore */ }
-    const totalSpend = payable + projExpenses + costTotal
-    return { receivable, paid, count: inv.length, totalSpend }
-  }
-
-  // RAG colour based on spend vs budget
-  function ragDot(project: Project) {
-    const { totalSpend } = projectStats(project.code)
-    if (project.budget <= 0) return null
-    const pct = totalSpend / project.budget
-    const color = pct > 1 ? 'bg-red-500' : pct >= 0.75 ? 'bg-ac-amber' : 'bg-ac-green'
-    const label = pct > 1 ? 'Over budget' : pct >= 0.75 ? 'Approaching budget' : 'Within budget'
-    return <span className={cn('w-2 h-2 rounded-full flex-shrink-0 inline-block', color)} title={label} />
+    const expenseTotal = expenses.filter(e => e.project_code === code).reduce((t, e) => t + Number(e.total), 0)
+    const outstanding = expenses.filter(e => e.project_code === code && e.status !== 'paid').length
+    const totalSpend = directCosts + expenseTotal
+    return { totalSpend, outstanding }
   }
 
   const footer = (
@@ -251,7 +238,8 @@ export default function ProjectsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.map(project => {
               const stats = projectStats(project.code)
-              const budgetUsed = project.budget > 0 ? Math.min((stats.receivable / project.budget) * 100, 100) : 0
+              const pctUsed = project.budget > 0 ? (stats.totalSpend / project.budget) * 100 : 0
+              const barColor = pctUsed >= 100 ? 'bg-red-500' : pctUsed >= 75 ? 'bg-ac-amber' : 'bg-ac-green'
               return (
                 <div
                   key={project.code}
@@ -264,7 +252,11 @@ export default function ProjectsPage() {
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="font-mono text-[10px] uppercase tracking-widest text-muted">{project.code}</span>
                           <span className={cn('badge', STATUS_STYLES[project.status])}>{project.status}</span>
-                          {ragDot(project)}
+                          {stats.outstanding > 0 && (
+                            <span className="font-mono text-[9px] text-ac-amber bg-amber-50 border border-amber-200 px-1 py-0.5">
+                              {stats.outstanding} outstanding
+                            </span>
+                          )}
                         </div>
                         <p className="text-sm font-semibold text-ink truncate">{project.name}</p>
                         <p className="font-mono text-[10px] text-muted mt-0.5 uppercase tracking-wider">
@@ -282,34 +274,36 @@ export default function ProjectsPage() {
                   </div>
 
                   <div className="px-5 py-3 space-y-2">
-                    {project.budget > 0 && (
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="font-mono text-[10px] uppercase tracking-wider text-muted">Budget</span>
-                          <span className="font-mono text-xs text-ink">{fmt(stats.receivable)} / {fmt(project.budget)}</span>
+                    {project.budget > 0 ? (
+                      <>
+                        <div>
+                          <div className="flex justify-between items-center mb-1.5">
+                            <span className="font-mono text-sm font-semibold text-ink">{fmt(stats.totalSpend)}</span>
+                            <span className="font-mono text-[10px] text-muted">of {fmt(project.budget)}</span>
+                          </div>
+                          <div className="h-2 bg-rule overflow-hidden">
+                            <div
+                              className={cn('h-full transition-all', barColor)}
+                              style={{ width: `${Math.min(pctUsed, 100)}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between items-center mt-1">
+                            <span className="font-mono text-[10px] text-muted">{pctUsed.toFixed(0)}% used</span>
+                            {pctUsed >= 100
+                              ? <span className="font-mono text-[10px] text-red-600 font-semibold">Over by {fmt(stats.totalSpend - project.budget)}</span>
+                              : <span className="font-mono text-[10px] text-muted">{fmt(project.budget - stats.totalSpend)} left</span>
+                            }
+                          </div>
                         </div>
-                        <div className="h-1.5 bg-rule overflow-hidden">
-                          <div className={cn('h-full transition-all', budgetUsed >= 100 ? 'bg-red-500' : 'bg-ac-green')}
-                            style={{ width: `${budgetUsed}%` }} />
-                        </div>
-                      </div>
+                      </>
+                    ) : (
+                      <p className="font-mono text-xs text-muted">
+                        {fmt(stats.totalSpend)} total spend
+                        {stats.outstanding > 0 ? ` · ${stats.outstanding} outstanding` : ''}
+                      </p>
                     )}
-                    <div className="flex justify-between">
-                      <span className="font-mono text-xs text-muted">{stats.count} invoice{stats.count !== 1 ? 's' : ''}</span>
-                      <span className="font-mono text-xs text-ac-green">{fmt(stats.paid)} paid</span>
-                    </div>
-                    {(() => {
-                      const unpaidExpenses = expenses
-                        .filter(e => e.project_code === project.code && e.status !== 'paid')
-                        .reduce((t, e) => t + Number(e.total), 0)
-                      return unpaidExpenses > 0 ? (
-                        <div className="flex justify-between">
-                          <span className="font-mono text-[10px] text-ac-amber">{fmt(unpaidExpenses)} outstanding expenses</span>
-                        </div>
-                      ) : null
-                    })()}
                     {project.notes && (
-                      <p className="text-xs text-muted line-clamp-2">{project.notes}</p>
+                      <p className="text-xs text-muted line-clamp-1 pt-0.5">{project.notes}</p>
                     )}
                   </div>
                 </div>
