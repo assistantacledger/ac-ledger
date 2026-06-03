@@ -21,6 +21,14 @@ const CURRENCIES = ['£', '$', '€']
 
 const blankLine = (): LineItem => ({ description: '', qty: 1, unit: 0, total: 0 })
 
+interface InvMeta { v?: number; pm?: string; pa?: number }
+
+function buildInternal(meta: InvMeta, text: string): string | null {
+  const m = JSON.stringify(meta)
+  const prefix = `||${m}||`
+  return text.trim() ? `${prefix}\n${text}` : prefix
+}
+
 function emptyInvoice(): InvoiceInsert {
   return {
     type: 'receivable',
@@ -71,6 +79,9 @@ export default function GeneratePage() {
   const [templateModalOpen, setTemplateModalOpen] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateSaved, setTemplateSaved] = useState(false)
+  // VAT
+  const [vatEnabled, setVatEnabled] = useState(false)
+  const [vatRate, setVatRate] = useState(20)
   const [expensePicker, setExpensePicker] = useState(false)
   const [pendingExpenseIds, setPendingExpenseIds] = useState<string[]>([])
 
@@ -192,7 +203,8 @@ export default function GeneratePage() {
     setError(null)
     setSaving(true)
     try {
-      const created = await createInvoice(form)
+      const formWithVat = { ...form, internal: buildInternal({ v: vatEnabled ? vatRate : 0 }, '') }
+      const created = await createInvoice(formWithVat)
       setSaved(true)
       setSavedInvoiceId(created.id)
       // Link any picked expenses to this invoice
@@ -240,17 +252,21 @@ export default function GeneratePage() {
     }, 1000)
   }
 
+  const lineTotal = (form.line_items ?? []).reduce((t, l) => t + Number(l.total), 0)
+  const vatAmount = (lineTotal || form.amount) * vatRate / 100
+  const totalWithVat = (lineTotal || form.amount) + (vatEnabled ? vatAmount : 0)
+
   // Preview invoice object — no forPrint id (separate hidden element handles printing)
+  // internal field encodes VAT: v=0 means off, v=N means N% VAT
   const previewInvoice: Invoice = {
     id: 'preview',
     ...form,
+    internal: buildInternal({ v: vatEnabled ? vatRate : 0 }, ''),
     created_at: new Date().toISOString(),
     party: form.party || 'Client Name',
     ref: form.ref || 'AC-0000',
     amount: form.amount,
   }
-
-  const lineTotal = (form.line_items ?? []).reduce((t, l) => t + Number(l.total), 0)
 
   return (
     <>
@@ -520,9 +536,55 @@ export default function GeneratePage() {
                 </table>
               </div>
 
-              <div className="mt-3 flex justify-end gap-4 items-center">
-                <span className="font-mono text-xs text-muted uppercase tracking-wider">Total</span>
-                <span className="font-mono text-sm font-semibold text-ink">{fmt(lineTotal || form.amount, form.currency)}</span>
+              <div className="mt-3 space-y-1.5">
+                {/* Subtotal — only shown when VAT is on */}
+                {vatEnabled && (
+                  <div className="flex justify-end gap-4 items-center">
+                    <span className="font-mono text-xs text-muted uppercase tracking-wider">Subtotal</span>
+                    <span className="font-mono text-sm text-ink w-24 text-right">{fmt(lineTotal || form.amount, form.currency)}</span>
+                  </div>
+                )}
+
+                {/* VAT row with toggle */}
+                <div className="flex justify-end gap-4 items-center">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-muted uppercase tracking-wider">VAT</span>
+                    <button
+                      onClick={() => setVatEnabled(v => !v)}
+                      className={cn(
+                        'px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider border transition-colors',
+                        vatEnabled ? 'border-ink bg-ink text-white' : 'border-rule text-muted hover:border-ink hover:text-ink'
+                      )}
+                    >
+                      {vatEnabled ? 'ON' : 'OFF'}
+                    </button>
+                    {vatEnabled && (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={vatRate}
+                          onChange={e => setVatRate(Math.max(0, Number(e.target.value) || 0))}
+                          min="0" max="100"
+                          className="w-12 border border-rule bg-white px-1.5 py-0.5 text-xs font-mono text-ink focus:outline-none focus:border-ink text-right"
+                        />
+                        <span className="font-mono text-xs text-muted">%</span>
+                      </div>
+                    )}
+                  </div>
+                  <span className="font-mono text-sm text-ink w-24 text-right">
+                    {vatEnabled ? fmt(vatAmount, form.currency) : '—'}
+                  </span>
+                </div>
+
+                {/* Total Due */}
+                <div className="flex justify-end gap-4 items-center border-t border-rule pt-1.5">
+                  <span className="font-mono text-xs text-muted uppercase tracking-wider">
+                    {vatEnabled ? 'Total Due' : 'Total'}
+                  </span>
+                  <span className="font-mono text-sm font-semibold text-ink w-24 text-right">
+                    {fmt(vatEnabled ? totalWithVat : (lineTotal || form.amount), form.currency)}
+                  </span>
+                </div>
               </div>
             </div>
 

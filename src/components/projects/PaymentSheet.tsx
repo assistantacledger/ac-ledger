@@ -87,6 +87,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
   // ── UI ─────────────────────────────────────────────────────────────────────
   const [lightbox, setLightbox] = useState<{ url: string; name: string; isPdf: boolean } | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
+  const [zipProgress, setZipProgress] = useState<{ current: number; total: number } | null>(null)
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -201,7 +202,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
         accName: bd.accName ?? '',
         iban: bd.iban ?? '',
         swift: bd.swift ?? '',
-        receipt: inv.pdf_url ?? '',
+        invoiceUrl: inv.pdf_url ?? '',
         status: inv.status,
       }
     })
@@ -209,7 +210,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
 
   function exportCSV() {
     const header = ['Paid', 'Supplier', 'Invoice Ref', 'Description', 'Category', 'Amount', 'Currency',
-      'Due Date', 'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt URL', 'Status']
+      'Due Date', 'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Invoice URL', 'Status']
     const rows = buildRows().map(r => Object.values(r))
     rows.push([])
     rows.push(['', '', '', '', '', totalOutstanding, '', '', '', '', '', '', '', '', '', 'Total Outstanding'])
@@ -227,9 +228,20 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
     try {
       const XLSX = await import('xlsx')
       const header = ['Paid', 'Supplier', 'Invoice Ref', 'Description', 'Category', 'Amount', 'Currency',
-        'Due Date', 'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Receipt URL', 'Status']
+        'Due Date', 'Bank Name', 'Sort Code', 'Acc No', 'Acc Name', 'IBAN', 'SWIFT', 'Invoice', 'Status']
 
-      const rows = buildRows().map(r => Object.values(r))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows: any[][] = buildRows().map(r => {
+        const vals: unknown[] = Object.values(r)
+        // Replace invoiceUrl value with hyperlink cell object
+        const urlIdx = 14 // 'Invoice URL' is at index 14
+        if (vals[urlIdx]) {
+          vals[urlIdx] = { t: 's', v: 'View Invoice', l: { Target: String(vals[urlIdx]) } }
+        } else {
+          vals[urlIdx] = 'No attachment'
+        }
+        return vals
+      })
       rows.push([], ['', '', '', '', '', totalOutstanding, '', '', '', '', '', '', '', '', '', 'Total Outstanding'])
       rows.push(['', '', '', '', '', totalPaid, '', '', '', '', '', '', '', '', '', 'Total Paid'])
       rows.push(['', '', '', '', '', grandTotal, '', '', '', '', '', '', '', '', '', 'Grand Total'])
@@ -277,9 +289,12 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
       const overdue = isOverdue(inv)
       const rowBg = isPaid ? '#f8f8f6' : overdue ? '#fff5f5' : '#ffffff'
       const amtStyle = isPaid ? 'text-decoration:line-through;color:#9a9a9a;' : overdue ? 'color:#dc2626;' : ''
+      const invLink = inv.pdf_url
+        ? `<div style="margin-top:2px;"><a href="${inv.pdf_url}" style="font-size:8px;color:#6a6a6a;font-family:monospace;word-break:break-all;">${inv.pdf_url}</a></div>`
+        : ''
       return `<tr style="border-bottom:1px solid #e2e2e0;background:${rowBg};">
         <td style="padding:5px 7px;font-size:12px;text-align:center;">${isPaid ? '✓' : '☐'}</td>
-        <td style="padding:5px 7px;font-size:10px;font-weight:600;">${inv.party}</td>
+        <td style="padding:5px 7px;font-size:10px;font-weight:600;">${inv.party}${invLink}</td>
         <td style="padding:5px 7px;font-size:9px;font-family:monospace;">${inv.ref ?? ''}</td>
         <td style="padding:5px 7px;font-size:9px;color:#666;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${getDescription(inv)}</td>
         <td style="padding:5px 7px;font-size:9px;font-family:monospace;color:#9a9a9a;">${getCategory(inv)}</td>
@@ -349,6 +364,36 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
       .catch(() => toast('Could not copy — check browser permissions', 'error'))
   }
 
+  async function downloadAllZip() {
+    const withUrls = invoices.filter(i => i.pdf_url)
+    if (withUrls.length === 0) { toast('No invoice attachments to download', 'error'); return }
+    try {
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      for (let i = 0; i < withUrls.length; i++) {
+        const inv = withUrls[i]
+        setZipProgress({ current: i + 1, total: withUrls.length })
+        try {
+          const resp = await fetch(inv.pdf_url!)
+          if (!resp.ok) continue
+          const blob = await resp.blob()
+          const safeName = `${(inv.ref ?? 'invoice').replace(/[^a-z0-9_-]/gi, '-')}-${inv.party.replace(/[^a-z0-9_-]/gi, '-')}.pdf`
+          zip.file(safeName, blob)
+        } catch { /* skip failed fetches */ }
+      }
+      setZipProgress(null)
+      const content = await zip.generateAsync({ type: 'blob' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(content)
+      a.download = `${project.code}-invoices-${todayISO()}.zip`
+      a.click()
+      toast(`Downloaded ${withUrls.length} invoice${withUrls.length !== 1 ? 's' : ''} as ZIP`)
+    } catch (e) {
+      setZipProgress(null)
+      toast(`ZIP download failed: ${String(e)}`, 'error')
+    }
+  }
+
   // ── Table header helper ────────────────────────────────────────────────────
 
   const TH = ({ children, cls = '' }: { children: React.ReactNode; cls?: string }) => (
@@ -391,6 +436,16 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
               <span className="font-mono text-sm font-bold text-ink">{fmt(grandTotal)}</span>
             </div>
           )}
+          {/* Missing invoices badge */}
+          {(() => {
+            const missing = invoices.filter(i => !i.pdf_url).length
+            return missing > 0 ? (
+              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-3 py-1.5">
+                <Paperclip size={10} className="text-amber-600" />
+                <span className="font-mono text-[10px] text-amber-700 uppercase tracking-wider">{missing} invoice{missing !== 1 ? 's' : ''} missing attachment</span>
+              </div>
+            ) : null
+          })()}
         </div>
 
         {/* Actions */}
@@ -410,6 +465,11 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
           <button onClick={exportPDF}
             className="flex items-center gap-1 font-mono text-[10px] px-2 py-1.5 border border-rule text-muted hover:text-ink transition-colors uppercase tracking-wider">
             <Printer size={10} /> PDF
+          </button>
+          <button onClick={() => void downloadAllZip()} disabled={!!zipProgress}
+            className="flex items-center gap-1 font-mono text-[10px] px-2 py-1.5 border border-rule text-muted hover:text-ink transition-colors uppercase tracking-wider disabled:opacity-50">
+            <Download size={10} />
+            {zipProgress ? `${zipProgress.current}/${zipProgress.total}…` : 'All Invoices ZIP'}
           </button>
           <button onClick={handleShare}
             className={cn(
@@ -519,7 +579,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                   <TH cls="bg-blue-50/80">Acc Name</TH>
                   <TH cls="bg-blue-50/80">IBAN</TH>
                   <TH cls="bg-blue-50/80">SWIFT</TH>
-                  <TH cls="w-14">Receipt</TH>
+                  <TH cls="w-28">Invoice</TH>
                   <TH
                     cls="cursor-pointer hover:text-ink select-none"
                   >
@@ -600,20 +660,19 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                       <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20 max-w-[130px] truncate`}>{bd.iban ?? <span className="text-muted/30">—</span>}</td>
                       <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.swift ?? <span className="text-muted/30">—</span>}</td>
 
-                      {/* Receipt */}
-                      <td className="px-3 py-2 text-center">
+                      {/* Invoice attachment */}
+                      <td className="px-3 py-2 whitespace-nowrap">
                         {inv.pdf_url ? (
-                          <button
-                            onClick={() => {
-                              const isPdf = !inv.pdf_url!.match(/\.(jpg|jpeg|png|gif|webp)/i)
-                              setLightbox({ url: inv.pdf_url!, name: inv.party, isPdf })
-                            }}
-                            className="text-muted hover:text-ink transition-colors"
-                            title="View receipt"
+                          <a
+                            href={inv.pdf_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 font-mono text-[10px] text-muted hover:text-ink transition-colors"
+                            title="Open invoice PDF in new tab"
                           >
-                            <Paperclip size={12} />
-                          </button>
-                        ) : <span className="text-muted/30">—</span>}
+                            <Paperclip size={10} /> View Invoice
+                          </a>
+                        ) : <span className="text-muted/30 font-mono text-[10px]">—</span>}
                       </td>
 
                       {/* Status */}
