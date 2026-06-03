@@ -233,13 +233,16 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const rows: any[][] = buildRows().map(r => {
         const vals: unknown[] = Object.values(r)
-        // Replace invoiceUrl value with hyperlink cell object
-        const urlIdx = 14 // 'Invoice URL' is at index 14
-        if (vals[urlIdx]) {
-          vals[urlIdx] = { t: 's', v: 'View Invoice', l: { Target: String(vals[urlIdx]) } }
-        } else {
-          vals[urlIdx] = 'No attachment'
+        const urlIdx = 14 // invoiceUrl column index
+        const url = vals[urlIdx] ? String(vals[urlIdx]) : null
+        // Supplier name (index 1) → hyperlink if invoice URL exists
+        if (url) {
+          vals[1] = { t: 's', v: String(vals[1]), l: { Target: url } }
         }
+        // Invoice column → hyperlink label or 'No attachment'
+        vals[urlIdx] = url
+          ? { t: 's', v: 'View Invoice', l: { Target: url } }
+          : 'No attachment'
         return vals
       })
       rows.push([], ['', '', '', '', '', totalOutstanding, '', '', '', '', '', '', '', '', '', 'Total Outstanding'])
@@ -619,8 +622,24 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                       </td>
 
                       {/* Supplier */}
-                      <td className={`px-3 py-2 font-semibold text-sm ${textCls} ${paid ? 'line-through' : ''}`}>
-                        {inv.party}
+                      <td className="px-3 py-2">
+                        <span className={`font-semibold text-sm ${textCls} ${paid ? 'line-through' : ''}`}>
+                          {inv.party}
+                        </span>
+                        {inv.pdf_url ? (
+                          <a
+                            href={inv.pdf_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block mt-0.5 font-mono text-[10px] text-muted hover:text-ink transition-colors"
+                          >
+                            📎 View Invoice →
+                          </a>
+                        ) : (
+                          <span className="block mt-0.5 font-mono text-[10px] text-amber-600">
+                            No invoice attached
+                          </span>
+                        )}
                       </td>
 
                       {/* Ref */}
