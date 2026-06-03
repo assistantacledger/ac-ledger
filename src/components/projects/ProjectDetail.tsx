@@ -2612,8 +2612,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         {tab === 'payment-sheet' && (
           <div className="p-6">
             <PaymentSheet
-              invoices={projInvoices}
               project={project}
+              initialInvoices={projInvoices}
               costs={costs}
               reconLinks={reconLinks}
               updateInvoice={updateInvoice}

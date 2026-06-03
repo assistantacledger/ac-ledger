@@ -453,12 +453,11 @@ export default function AccountsPage() {
                 <p className="font-mono text-xs text-muted text-center py-12">Project not found</p>
               ) : (
                 <PaymentSheet
-                  invoices={invoices.filter(i => i.project_code === sheetProject)}
+                  initialInvoices={invoices.filter(i => i.project_code === sheetProject)}
                   project={sheetProjectObj}
                   costs={sheetCosts}
                   reconLinks={sheetReconLinks}
                   updateInvoice={updateInvoice}
-                  onAddToRun={handleAddToRun}
                 />
               )}
             </div>
