@@ -6,11 +6,12 @@ import { useInvoices } from '@/hooks/useInvoices'
 import { useExpenses } from '@/hooks/useExpenses'
 import { usePayRuns } from '@/hooks/usePayRuns'
 import { PaymentSheet } from '@/components/projects/PaymentSheet'
+import { MasterPaymentSheet } from '@/components/accounts/MasterPaymentSheet'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { Plus, Trash2, Play, Upload, X, CheckCircle, AlertCircle, HelpCircle, ChevronDown, ChevronRight, Table2 } from 'lucide-react'
 import type { PayRun, PayRunItem, Invoice, Expense, Project } from '@/types'
 
-type Tab = 'runs' | 'reconcile'
+type Tab = 'runs' | 'reconcile' | 'payment-sheet'
 
 // ─── Bank Reconciliation ──────────────────────────────────────────────────────
 
@@ -162,19 +163,19 @@ export default function AccountsPage() {
 
         {/* Tabs */}
         <div className="flex border-b border-rule mb-6 gap-0">
-          {(['runs', 'reconcile'] as Tab[]).map(t => (
+          {(['runs', 'reconcile', 'payment-sheet'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={cn('px-5 py-2.5 font-mono text-xs uppercase tracking-wider border-b-2 -mb-px transition-colors',
                 tab === t ? 'border-ink text-ink' : 'border-transparent text-muted hover:text-ink')}>
-              {t === 'runs' ? 'Payment Runs' : 'Bank Reconcile'}
+              {t === 'runs' ? 'Payment Runs' : t === 'reconcile' ? 'Bank Reconcile' : 'Payment Sheet'}
             </button>
           ))}
-          {/* Payment Sheet button — always visible */}
+          {/* Project-specific sheet button */}
           <div className="flex-1" />
           <button
             onClick={() => setSheetOpen(true)}
             className="flex items-center gap-1.5 mb-1 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted hover:text-ink hover:border-ink transition-colors">
-            <Table2 size={11} /> Payment Sheet
+            <Table2 size={11} /> Project View
           </button>
         </div>
 
@@ -412,9 +413,14 @@ export default function AccountsPage() {
             )}
           </div>
         )}
+
+        {/* ── Payment Sheet tab ──────────────────────────────────────────── */}
+        {tab === 'payment-sheet' && (
+          <MasterPaymentSheet updateInvoice={updateInvoice} />
+        )}
       </main>
 
-      {/* ── Payment Sheet Modal ── */}
+      {/* ── Project-specific Payment Sheet Modal ── */}
       {sheetOpen && (
         <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(0,0,0,0.5)' }}>
           <div className="flex-1 flex flex-col bg-paper m-4 md:m-8 border border-rule shadow-xl overflow-hidden">

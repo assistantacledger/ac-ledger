@@ -14,7 +14,14 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git add:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git restore:*)",
+      "Bash(npm ls:*)",
+      "Bash(sudo xcodebuild:*)",
+      "Bash(git -C /Users/johannes/Downloads/ac-ledger-rebuild add .)",
+      "Bash(git -C /Users/johannes/Downloads/ac-ledger-rebuild commit -m ':*)",
+      "Bash(git -C /Users/johannes/Downloads/ac-ledger-rebuild push)",
+      "Bash(git -C /Users/johannes/Downloads/ac-ledger-rebuild status)"
     ]
   }
 }
