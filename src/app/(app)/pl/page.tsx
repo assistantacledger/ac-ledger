@@ -174,7 +174,7 @@ export default function PLPage() {
                 {rows.map((row, idx) => {
                   const isEmpty = row.revenue === 0 && row.costs === 0 && row.expenses === 0
                   return (
-                    <tr key={row.label} className={cn('border-b border-rule last:border-0',
+                    <tr key={row.label} className={cn('border-b border-rule last:border-0 transition-colors duration-150',
                       isEmpty ? 'opacity-40' : 'hover:bg-cream/70',
                       idx % 2 === 1 && 'bg-paper/40')}>
                       <td className="px-5 py-2.5 font-mono text-xs text-ink font-medium">{row.label} {year}</td>

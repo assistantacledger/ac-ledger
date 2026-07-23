@@ -21,27 +21,34 @@
   input, select, textarea, button {
     border-radius: 0 !important;
   }
+
+  /* Global 150ms transitions on interactive elements */
+  a, button, select, input[type="checkbox"], input[type="radio"] {
+    transition-duration: 150ms;
+    transition-timing-function: ease;
+  }
 }
 
 @layer components {
-  /* Status badges */
+  /* ── Status badges ─────────────────────────────────────────────────────────── */
   .badge {
-    @apply inline-flex items-center px-1.5 py-0.5 font-mono text-xs font-medium uppercase tracking-wide;
+    @apply inline-flex items-center px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-widest;
   }
+  /* Design-system-only colours */
   .badge-paid      { @apply bg-ac-green-pale text-ac-green; }
   .badge-pending   { @apply bg-ac-amber-pale text-ac-amber; }
-  .badge-overdue   { @apply bg-red-50 text-red-600; }
+  .badge-overdue   { background-color: #fef2f2; color: #dc2626; }
   .badge-draft     { @apply bg-cream text-muted; }
-  .badge-submitted { @apply bg-blue-50 text-blue-700; }
-  .badge-approved  { @apply bg-green-50 text-green-700; }
-  .badge-sent      { @apply bg-purple-50 text-purple-700; }
-  .badge-part-paid { @apply bg-indigo-50 text-indigo-700; }
+  .badge-submitted { @apply bg-ac-amber-pale text-ac-amber; }
+  .badge-approved  { @apply bg-ac-green-pale text-ac-green; }
+  .badge-sent      { @apply bg-cream text-ink; border: 1px solid #e2e2e0; }
+  .badge-part-paid { @apply bg-ac-amber-pale text-ac-amber; }
 
-  /* Table cards */
+  /* ── Table cards ────────────────────────────────────────────────────────────── */
   .tbl-card {
     @apply bg-white border border-rule overflow-hidden;
     border-top-width: 2px;
-    border-top-color: #2a2a2a;
+    border-top-color: #1a1a1a;
   }
 
   .tbl-hd {
@@ -49,43 +56,81 @@
   }
 
   .tbl-lbl {
-    @apply font-mono text-xs uppercase tracking-widest text-muted;
+    @apply font-mono text-[10px] uppercase tracking-widest text-muted;
   }
 
-  /* Table rows — show actions on hover */
+  /* ── Table rows — actions reveal on hover ──────────────────────────────────── */
   .row-actions {
-    @apply flex items-center gap-1 opacity-0 transition-opacity;
+    @apply flex items-center gap-1 opacity-0;
+    transition: opacity 150ms ease;
   }
-  tr:hover .row-actions {
+  tr:hover .row-actions,
+  div:hover > .row-actions,
+  .group:hover .row-actions,
+  .group\/row:hover .row-actions {
     @apply opacity-100;
   }
 
-  /* Form labels */
-  .field-label {
-    @apply block font-mono text-xs uppercase tracking-wider text-muted mb-1;
+  /* Table row hover */
+  .tbl-row {
+    @apply border-b border-rule last:border-0 transition-colors duration-150;
+  }
+  .tbl-row:hover {
+    @apply bg-cream/70;
   }
 
-  /* Section cards */
+  /* ── Form labels ────────────────────────────────────────────────────────────── */
+  .field-label {
+    @apply block font-mono text-[10px] uppercase tracking-widest text-muted mb-1;
+  }
+
+  /* ── Section cards ──────────────────────────────────────────────────────────── */
   .s-section {
     @apply bg-white border border-rule p-6 mb-5;
     border-top-width: 2px;
-    border-top-color: #2a2a2a;
+    border-top-color: #1a1a1a;
   }
 
-  /* Stat cards */
+  /* ── Stat cards ─────────────────────────────────────────────────────────────── */
   .stat-card {
     @apply bg-white border border-rule p-5 relative overflow-hidden;
-    transition: transform 0.15s, box-shadow 0.15s;
+    border-top-width: 2px;
+    border-top-color: #1a1a1a;
+    transition: transform 150ms ease, box-shadow 150ms ease;
   }
   .stat-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.07);
   }
-  .stat-card::before {
-    content: '';
-    @apply absolute top-0 left-0 right-0;
-    height: 2px;
+
+  /* ── Buttons ────────────────────────────────────────────────────────────────── */
+  .btn-primary {
+    @apply flex items-center gap-1.5 bg-ink text-white px-3 py-1.5 text-xs font-mono uppercase tracking-wider;
+    transition: background-color 150ms ease;
   }
+  .btn-primary:hover { background-color: #333; }
+
+  .btn-ghost {
+    @apply flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-wider border border-rule text-muted;
+    transition: color 150ms ease, border-color 150ms ease;
+  }
+  .btn-ghost:hover { @apply text-ink border-ink; }
+
+  /* ── Empty states ───────────────────────────────────────────────────────────── */
+  .empty-state {
+    @apply py-16 text-center flex flex-col items-center gap-3;
+  }
+  .empty-state-icon {
+    @apply text-rule;
+  }
+  .empty-state p {
+    @apply font-mono text-xs text-muted uppercase tracking-widest;
+  }
+  .empty-state a, .empty-state button {
+    @apply font-mono text-xs text-ink underline underline-offset-2;
+    transition: color 150ms ease;
+  }
+  .empty-state a:hover, .empty-state button:hover { @apply text-muted; }
 }
 
 /* Print styles */
@@ -166,12 +211,12 @@
 .dark .tbl-card {
   background-color: #1e1e1e !important;
   border-color: #2a2a2a !important;
-  border-top-color: #3a3a3a !important;
+  border-top-color: #4a4a4a !important;
 }
 .dark .s-section {
   background-color: #1e1e1e !important;
   border-color: #2a2a2a !important;
-  border-top-color: #3a3a3a !important;
+  border-top-color: #4a4a4a !important;
 }
 .dark .stat-card {
   background-color: #1e1e1e !important;
@@ -184,7 +229,8 @@
 /* Table header rows */
 .dark .bg-paper\/50 { background-color: #1a1a1a !important; }
 .dark .bg-cream\/70,
-.dark .hover\:bg-cream\/60:hover { background-color: #242424 !important; }
+.dark .hover\:bg-cream\/60:hover,
+.dark .hover\:bg-cream\/70:hover { background-color: #242424 !important; }
 
 /* Action bar */
 .dark .bg-\[#d8d8d6\] { background-color: #2a2a2a !important; }
@@ -201,3 +247,13 @@
 
 /* Buttons with bg-white */
 .dark button.bg-white { background-color: #2a2a2a !important; color: #e8e8e6 !important; }
+
+/* Dark mode badges */
+.dark .badge-paid     { background-color: #1a2e24 !important; color: #5aaa7a !important; }
+.dark .badge-pending  { background-color: #2a2210 !important; color: #b09050 !important; }
+.dark .badge-overdue  { background-color: #2a1010 !important; color: #f87171 !important; }
+.dark .badge-draft    { background-color: #242424 !important; color: #666 !important; }
+.dark .badge-submitted { background-color: #2a2210 !important; color: #b09050 !important; }
+.dark .badge-approved  { background-color: #1a2e24 !important; color: #5aaa7a !important; }
+.dark .badge-sent      { background-color: #2a2a2a !important; color: #e8e8e6 !important; border-color: #3a3a3a !important; }
+.dark .badge-part-paid { background-color: #2a2210 !important; color: #b09050 !important; }

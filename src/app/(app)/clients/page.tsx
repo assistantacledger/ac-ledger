@@ -72,7 +72,7 @@ export default function ClientsPage() {
             { label: 'Total Billed', value: fmt(totals.billed), sub: 'across all time' },
             { label: 'Outstanding', value: fmt(totals.outstanding), sub: 'currently open' },
           ].map(({ label, value, sub }) => (
-            <div key={label} className="stat-card" style={{ borderTopColor: '#2a2a2a' } as React.CSSProperties}>
+            <div key={label} className="stat-card">
               <p className="font-mono text-[10px] uppercase tracking-widest text-muted mb-2">{label}</p>
               <p className="font-sans font-semibold text-2xl text-ink">{loading ? '—' : value}</p>
               <p className="font-mono text-xs text-muted mt-1">{sub}</p>

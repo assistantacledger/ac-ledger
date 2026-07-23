@@ -243,7 +243,7 @@ export default function ProjectsPage() {
               return (
                 <div
                   key={project.code}
-                  className="tbl-card group cursor-pointer hover:shadow-md transition-shadow"
+                  className="tbl-card group cursor-pointer hover:shadow-md transition-all duration-150 flex flex-col"
                   onClick={() => setSelectedProject(project)}
                 >
                   <div className="px-5 py-4 border-b border-rule">
@@ -253,8 +253,8 @@ export default function ProjectsPage() {
                           <span className="font-mono text-[10px] uppercase tracking-widest text-muted">{project.code}</span>
                           <span className={cn('badge', STATUS_STYLES[project.status])}>{project.status}</span>
                           {stats.outstanding > 0 && (
-                            <span className="font-mono text-[9px] text-ac-amber bg-amber-50 border border-amber-200 px-1 py-0.5">
-                              {stats.outstanding} outstanding
+                            <span className="badge badge-pending">
+                              {stats.outstanding} pending
                             </span>
                           )}
                         </div>

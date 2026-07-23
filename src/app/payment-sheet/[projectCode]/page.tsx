@@ -213,15 +213,15 @@ export default function PublicPaymentSheetPage() {
 
         {/* Summary cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div className="bg-amber-50 border border-amber-200 px-4 py-3">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-amber-700 mb-1">Outstanding</p>
-            <p className="font-mono text-xl font-bold text-amber-900">{fmt(totalOutstanding)}</p>
-            <p className="font-mono text-[10px] text-amber-600 mt-0.5">{outstanding.length} invoice{outstanding.length !== 1 ? 's' : ''}</p>
+          <div className="bg-ac-amber-pale border border-ac-amber/25 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-ac-amber mb-1">Outstanding</p>
+            <p className="font-mono text-xl font-bold text-ac-amber">{fmt(totalOutstanding)}</p>
+            <p className="font-mono text-[10px] text-ac-amber/70 mt-0.5">{outstanding.length} invoice{outstanding.length !== 1 ? 's' : ''}</p>
           </div>
-          <div className="bg-green-50 border border-green-200 px-4 py-3">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-green-700 mb-1">Paid</p>
-            <p className="font-mono text-xl font-bold text-green-800">{fmt(totalPaid)}</p>
-            <p className="font-mono text-[10px] text-green-600 mt-0.5">{paid.length} invoice{paid.length !== 1 ? 's' : ''}</p>
+          <div className="bg-ac-green-pale border border-ac-green/25 px-4 py-3">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-ac-green mb-1">Paid</p>
+            <p className="font-mono text-xl font-bold text-ac-green">{fmt(totalPaid)}</p>
+            <p className="font-mono text-[10px] text-ac-green/70 mt-0.5">{paid.length} invoice{paid.length !== 1 ? 's' : ''}</p>
           </div>
           <div className="bg-white border border-[#e2e2e0] px-4 py-3 col-span-2 sm:col-span-1">
             <p className="font-mono text-[10px] uppercase tracking-wider text-[#9a9a9a] mb-1">Grand Total</p>
@@ -287,7 +287,7 @@ export default function PublicPaymentSheetPage() {
                             className={cn(
                               'w-6 h-6 flex items-center justify-center border-2 transition-all mx-auto rounded-sm',
                               marking ? 'opacity-40' : '',
-                              isPaid ? 'bg-green-500 border-green-500' : 'border-[#e2e2e0] hover:border-[#1a1a1a]'
+                              isPaid ? 'bg-ac-green border-ac-green' : 'border-[#e2e2e0] hover:border-[#1a1a1a]'
                             )}
                           >
                             {isPaid && <Check size={13} className="text-white" />}
@@ -340,7 +340,7 @@ export default function PublicPaymentSheetPage() {
                         <td className="px-3 py-3">
                           <span className={cn(
                             'inline-block font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 border',
-                            isPaid ? 'border-green-300 text-green-700 bg-green-50' :
+                            isPaid ? 'border-ac-green/30 text-ac-green bg-ac-green-pale' :
                             overdue ? 'border-red-300 text-red-700 bg-red-50' :
                             'border-[#e2e2e0] text-[#9a9a9a]'
                           )}>
@@ -362,7 +362,7 @@ export default function PublicPaymentSheetPage() {
               </div>
               <div>
                 <p className="font-mono text-[9px] uppercase tracking-widest text-[#9a9a9a]">Paid</p>
-                <p className="font-mono text-lg font-bold text-green-700">{fmt(totalPaid)}</p>
+                <p className="font-mono text-lg font-bold text-ac-green">{fmt(totalPaid)}</p>
               </div>
               <div>
                 <p className="font-mono text-[9px] uppercase tracking-widest text-[#9a9a9a]">Grand Total</p>

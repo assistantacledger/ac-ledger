@@ -21,15 +21,15 @@ type StatCardProps = {
   trend?: 'up' | 'down' | 'neutral'
 }
 
-function StatCard({ label, value, sub, accent, icon, trend }: StatCardProps) {
+function StatCard({ label, value, sub, accent, icon }: StatCardProps) {
   return (
     <div className="stat-card" style={{ borderTopColor: accent } as React.CSSProperties}>
       <div className="flex items-start justify-between mb-3">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{label}</p>
-        <span className="text-muted">{icon}</span>
+        <p className="tbl-lbl">{label}</p>
+        <span className="text-muted opacity-60">{icon}</span>
       </div>
-      <p className="font-sans font-semibold text-2xl text-ink tracking-tight">{value}</p>
-      {sub && <p className="font-mono text-xs text-muted mt-1">{sub}</p>}
+      <p className="font-sans font-semibold text-2xl text-ink tracking-tight leading-none">{value}</p>
+      {sub && <p className="font-mono text-[10px] text-muted mt-2 uppercase tracking-wider">{sub}</p>}
     </div>
   )
 }
@@ -222,14 +222,14 @@ export default function DashboardPage() {
             label="Overdue"
             value={loading ? '—' : fmt(totalOverdue)}
             sub={loading ? undefined : `${overdue.length} invoice${overdue.length !== 1 ? 's' : ''} past due`}
-            accent={overdue.length > 0 ? '#dc2626' : '#2a2a2a'}
+            accent={overdue.length > 0 ? '#dc2626' : '#1a1a1a'}
             icon={<AlertCircle size={16} />}
           />
           <StatCard
             label="Net Position"
             value={loading ? '—' : `${netPosition >= 0 ? '+' : ''}${fmt(netPosition)}`}
             sub={loading ? undefined : `${pendingExpenses.length} expense${pendingExpenses.length !== 1 ? 's' : ''} pending approval`}
-            accent="#2a2a2a"
+            accent="#1a1a1a"
             icon={<Scale size={16} />}
           />
         </div>
@@ -260,7 +260,7 @@ export default function DashboardPage() {
               </thead>
               <tbody>
                 {overdueChase.map(inv => (
-                  <tr key={inv.id} className="border-b border-rule last:border-0 hover:bg-red-50/30 transition-colors group">
+                  <tr key={inv.id} className="border-b border-rule last:border-0 hover:bg-red-50/30 transition-colors duration-150 group">
                     <td className="px-5 py-2.5">
                       <span className="font-mono text-xs font-semibold text-red-600">
                         +{daysOverdue(inv.due!)}d
@@ -339,7 +339,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {recent.map((inv, i) => (
-                    <tr key={inv.id} className={cn('border-b border-rule last:border-0 hover:bg-cream/60 transition-colors group', i % 2 === 0 ? '' : 'bg-paper/40')}>
+                    <tr key={inv.id} className={cn('border-b border-rule last:border-0 hover:bg-cream/70 transition-colors duration-150 group', i % 2 !== 0 && 'bg-paper/40')}>
                       <td className="px-5 py-2.5 font-mono text-xs text-ink whitespace-nowrap">{inv.ref || '—'}</td>
                       <td className="px-3 py-2.5 text-sm text-ink max-w-[160px] truncate">
                         {inv.project_code

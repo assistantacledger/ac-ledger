@@ -204,7 +204,7 @@ export function ProjectInvoicesTab({
 
     const groups = []
     if (overdue.length) groups.push({ key: 'overdue', label: 'Overdue', headerClass: 'bg-red-50 border-red-200 text-red-700', invoices: overdue })
-    if (dueSoon.length) groups.push({ key: 'due-soon', label: 'Due Soon (≤14 days)', headerClass: 'bg-amber-50 border-amber-200 text-amber-700', invoices: dueSoon })
+    if (dueSoon.length) groups.push({ key: 'due-soon', label: 'Due Soon (≤14 days)', headerClass: 'bg-ac-amber-pale border-ac-amber/20 text-ac-amber', invoices: dueSoon })
     if (pending.length) groups.push({ key: 'pending', label: 'Pending', headerClass: 'bg-paper border-rule text-ink', invoices: pending })
     if (paid.length) groups.push({ key: 'paid', label: 'Paid', headerClass: 'bg-cream border-rule text-muted', invoices: paid })
     return groups
@@ -616,7 +616,7 @@ ${outstanding.map(inv => {
             )}
             {markInvoicePaid && inv.status !== 'paid' && (
               <button onClick={() => markInvoicePaid(inv.id)} title="Mark paid"
-                className="p-1 text-muted hover:text-green-600 opacity-0 group-hover:opacity-100 transition-all">
+                className="p-1 text-muted hover:text-ac-green opacity-0 group-hover:opacity-100 transition-all">
                 <CheckCircle size={12} />
               </button>
             )}
@@ -717,15 +717,15 @@ ${outstanding.map(inv => {
 
       {/* ── Duplicate warning ── */}
       {dupeGroups.length > 0 && (
-        <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 flex items-center justify-between gap-3">
+        <div className="mb-4 px-4 py-3 bg-ac-amber-pale border border-ac-amber/20 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <AlertTriangle size={13} className="text-amber-600 flex-shrink-0" />
-            <span className="font-mono text-xs text-amber-800">
+            <AlertTriangle size={13} className="text-ac-amber flex-shrink-0" />
+            <span className="font-mono text-xs text-ac-amber">
               {dupeGroups.length} possible duplicate{dupeGroups.length !== 1 ? 's' : ''} found
             </span>
           </div>
           <button onClick={() => setDupeReviewOpen(true)}
-            className="font-mono text-xs px-3 py-1 border border-amber-300 text-amber-700 hover:bg-amber-100 transition-colors">
+            className="font-mono text-xs px-3 py-1 border border-ac-amber/40 text-ac-amber hover:bg-ac-amber/10 transition-colors duration-150">
             Review
           </button>
         </div>
@@ -888,7 +888,7 @@ ${outstanding.map(inv => {
                               <div className="row-actions justify-end gap-0.5">
                                 {onPreview && <button onClick={() => onPreview(inv)} className="p-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-all"><Eye size={12} /></button>}
                                 {onEdit && <button onClick={() => onEdit(inv)} className="p-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-all"><Pencil size={12} /></button>}
-                                {markInvoicePaid && inv.status !== 'paid' && <button onClick={() => markInvoicePaid(inv.id)} className="p-1 text-muted hover:text-green-600 opacity-0 group-hover:opacity-100 transition-all"><CheckCircle size={12} /></button>}
+                                {markInvoicePaid && inv.status !== 'paid' && <button onClick={() => markInvoicePaid(inv.id)} className="p-1 text-muted hover:text-ac-green opacity-0 group-hover:opacity-100 transition-all"><CheckCircle size={12} /></button>}
                                 {createInvoice && <button onClick={() => openSplit(inv)} className="p-1 text-muted hover:text-ink opacity-0 group-hover:opacity-100 transition-all"><SplitSquareHorizontal size={12} /></button>}
                               </div>
                             </td>
@@ -929,10 +929,10 @@ ${outstanding.map(inv => {
             Receivable <span className="text-ink font-semibold">{fmt(totalReceivable)}</span>
           </span>
           <span className="font-mono text-[10px] text-muted uppercase tracking-wider">
-            Paid <span className="text-green-700 font-semibold">{fmt(totalPaid)}</span>
+            Paid <span className="text-ac-green font-semibold">{fmt(totalPaid)}</span>
           </span>
           <span className="font-mono text-[10px] text-muted uppercase tracking-wider">
-            Outstanding <span className="text-amber-700 font-semibold">{fmt(totalOutstanding)}</span>
+            Outstanding <span className="text-ac-amber font-semibold">{fmt(totalOutstanding)}</span>
           </span>
         </div>
         {selected.size > 0 && (
@@ -953,12 +953,12 @@ ${outstanding.map(inv => {
             <div className="p-6 space-y-6">
               {dupeGroups.map((group, gi) => (
                 <div key={gi} className="border border-rule">
-                  <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
-                    <span className="font-mono text-xs text-amber-700 uppercase tracking-wider">
+                  <div className="px-4 py-2 bg-ac-amber-pale border-b border-ac-amber/20 flex items-center justify-between">
+                    <span className="font-mono text-xs text-ac-amber uppercase tracking-wider">
                       {group.reason === 'ref' ? 'Same reference number' : 'Same party + similar amount'}
                     </span>
                     <button onClick={() => mergeGroup(group)} disabled={mergingId !== null}
-                      className="font-mono text-xs px-3 py-1 bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition-colors">
+                      className="font-mono text-xs px-3 py-1 bg-ac-amber text-white hover:opacity-80 disabled:opacity-50 transition-opacity duration-150">
                       Merge (keep highest)
                     </button>
                   </div>
@@ -1020,7 +1020,7 @@ ${outstanding.map(inv => {
                 const tot = splitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
                 const diff = Math.abs(tot - Number(splitInv.amount))
                 return (
-                  <div className={cn('font-mono text-xs flex items-center justify-between', diff > 0.01 ? 'text-red-600' : 'text-green-700')}>
+                  <div className={cn('font-mono text-xs flex items-center justify-between', diff > 0.01 ? 'text-red-600' : 'text-ac-green')}>
                     <span>Total: {fmt(tot, splitInv.currency)}</span>
                     {diff > 0.01 && <span>Remaining: {fmt(Number(splitInv.amount) - tot, splitInv.currency)}</span>}
                     {diff <= 0.01 && <span>✓ Balanced</span>}

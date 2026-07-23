@@ -9,7 +9,7 @@ interface ModalProps {
   onClose: () => void
   title: string
   children: React.ReactNode
-  size?: 'md' | 'lg' | 'xl' | '2xl' | '3xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
   footer?: React.ReactNode
 }
 
@@ -23,12 +23,19 @@ export function Modal({ isOpen, onClose, title, children, size = 'xl', footer }:
 
   if (!isOpen) return null
 
-  const maxW = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '2xl': 'max-w-2xl', '3xl': 'max-w-3xl' }[size]
+  const maxW = {
+    sm: 'max-w-sm',
+    md: 'max-w-md',
+    lg: 'max-w-lg',
+    xl: 'max-w-xl',
+    '2xl': 'max-w-2xl',
+    '3xl': 'max-w-3xl',
+  }[size]
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center p-6 overflow-y-auto"
-      style={{ background: 'rgba(26,26,26,0.45)', backdropFilter: 'blur(2px)' }}
+      style={{ background: 'rgba(26,26,26,0.5)', backdropFilter: 'blur(2px)' }}
       onClick={onClose}
     >
       <div
@@ -36,15 +43,24 @@ export function Modal({ isOpen, onClose, title, children, size = 'xl', footer }:
         style={{ borderTopWidth: 2, borderTopColor: '#1a1a1a' }}
         onClick={e => e.stopPropagation()}
       >
+        {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 bg-cream border-b border-rule flex-shrink-0">
           <p className="tbl-lbl">{title}</p>
-          <button onClick={onClose} className="text-muted hover:text-ink transition-colors p-0.5">
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-ink transition-colors duration-150 p-0.5 -mr-0.5"
+            aria-label="Close"
+          >
             <X size={13} />
           </button>
         </div>
+
+        {/* Body */}
         <div className="overflow-y-auto flex-1 max-h-[78vh]">
           {children}
         </div>
+
+        {/* Footer */}
         {footer && (
           <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-rule bg-cream flex-shrink-0">
             {footer}

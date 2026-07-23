@@ -762,13 +762,13 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
       {/* ── Summary pills + action bar ── */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap flex-1">
-          <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-3 py-1.5">
-            <span className="font-mono text-[10px] text-amber-700 uppercase tracking-wider">{allOutstanding.length} outstanding</span>
-            <span className="font-mono text-sm font-bold text-amber-800">{fmt(totalOutstanding)}</span>
+          <div className="flex items-center gap-1.5 bg-ac-amber-pale border border-ac-amber/20 px-3 py-1.5">
+            <span className="font-mono text-[10px] text-ac-amber uppercase tracking-wider">{allOutstanding.length} outstanding</span>
+            <span className="font-mono text-sm font-bold text-ac-amber">{fmt(totalOutstanding)}</span>
           </div>
-          <div className="flex items-center gap-1.5 bg-green-50 border border-green-200 px-3 py-1.5">
-            <span className="font-mono text-[10px] text-green-700 uppercase tracking-wider">{allPaid.length} paid</span>
-            <span className="font-mono text-sm font-bold text-green-800">{fmt(totalPaid)}</span>
+          <div className="flex items-center gap-1.5 bg-ac-green-pale border border-ac-green/20 px-3 py-1.5">
+            <span className="font-mono text-[10px] text-ac-green uppercase tracking-wider">{allPaid.length} paid</span>
+            <span className="font-mono text-sm font-bold text-ac-green">{fmt(totalPaid)}</span>
           </div>
           {invoices.length > 0 && (
             <div className="flex items-center gap-1.5 bg-paper border border-rule px-3 py-1.5">
@@ -779,9 +779,9 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
           {(() => {
             const missing = invoices.filter(i => !i.pdf_url).length
             return missing > 0 ? (
-              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-3 py-1.5">
-                <Paperclip size={10} className="text-amber-600" />
-                <span className="font-mono text-[10px] text-amber-700 uppercase tracking-wider">{missing} invoice{missing !== 1 ? 's' : ''} missing attachment</span>
+              <div className="flex items-center gap-1.5 bg-ac-amber-pale border border-ac-amber/30 px-3 py-1.5">
+                <Paperclip size={10} className="text-ac-amber" />
+                <span className="font-mono text-[10px] text-ac-amber uppercase tracking-wider">{missing} invoice{missing !== 1 ? 's' : ''} missing attachment</span>
               </div>
             ) : null
           })()}
@@ -812,7 +812,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
           <button onClick={handleShare}
             className={cn(
               'flex items-center gap-1 font-mono text-[10px] px-2 py-1.5 border transition-colors uppercase tracking-wider',
-              shareCopied ? 'border-green-400 text-green-700 bg-green-50' : 'border-rule text-muted hover:text-ink'
+              shareCopied ? 'border-ac-green text-ac-green bg-ac-green-pale' : 'border-rule text-muted hover:text-ink'
             )}>
             {shareCopied ? <Check size={10} /> : <Share2 size={10} />}
             {shareCopied ? 'Copied!' : 'Share'}
@@ -973,12 +973,12 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                   <TH cls="cursor-pointer hover:text-ink select-none">
                     <span onClick={() => toggleSort('due')}>Due Date <SortIcon k="due" /></span>
                   </TH>
-                  <TH cls="bg-blue-50/80">Bank Name</TH>
-                  <TH cls="bg-blue-50/80">Sort Code</TH>
-                  <TH cls="bg-blue-50/80">Acc No</TH>
-                  <TH cls="bg-blue-50/80">Acc Name</TH>
-                  <TH cls="bg-blue-50/80">IBAN</TH>
-                  <TH cls="bg-blue-50/80">SWIFT</TH>
+                  <TH cls="bg-cream">Bank Name</TH>
+                  <TH cls="bg-cream">Sort Code</TH>
+                  <TH cls="bg-cream">Acc No</TH>
+                  <TH cls="bg-cream">Acc Name</TH>
+                  <TH cls="bg-cream">IBAN</TH>
+                  <TH cls="bg-cream">SWIFT</TH>
                   <TH cls="w-28">Invoice</TH>
                   <TH cls="cursor-pointer hover:text-ink select-none">
                     <span onClick={() => toggleSort('status')}>Status <SortIcon k="status" /></span>
@@ -1002,7 +1002,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
 
                   const rowCls = cn(
                     'border-b border-rule last:border-0 transition-colors group',
-                    isSelected ? 'bg-blue-50/50' : isPri ? 'bg-orange-50/40' : paid ? 'bg-paper/60' : overdue ? 'bg-red-50/40' : idx % 2 === 1 ? 'bg-white' : 'bg-paper/20'
+                    isSelected ? 'bg-ac-green-pale/40' : isPri ? 'bg-ac-amber-pale/40' : paid ? 'bg-paper/60' : overdue ? 'bg-red-50/40' : idx % 2 === 1 ? 'bg-white' : 'bg-paper/20'
                   )
                   const textCls = paid ? 'text-muted' : 'text-ink'
                   const monoSmall = `font-mono text-[10px] ${paid ? 'text-muted/70' : 'text-muted'}`
@@ -1034,7 +1034,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                           title={paid ? 'Mark as unpaid' : 'Mark as paid'}
                           className={cn('w-5 h-5 flex items-center justify-center border-2 transition-all mx-auto',
                             marking ? 'opacity-40' : '',
-                            paid ? 'bg-green-500 border-green-500' : 'border-rule hover:border-ink')}>
+                            paid ? 'bg-ac-green border-ac-green' : 'border-rule hover:border-ink')}>
                           {paid && <Check size={11} className="text-white" />}
                         </button>
                       </td>
@@ -1043,7 +1043,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                       <td className="px-3 py-2">
                         <span className={`font-semibold text-sm ${textCls} ${paid ? 'line-through' : ''}`}>{inv.party}</span>
                         {paymentNote && (
-                          <span className="block mt-0.5 font-mono text-[10px] text-amber-700 italic">💳 {paymentNote}</span>
+                          <span className="block mt-0.5 font-mono text-[10px] text-ac-amber italic">💳 {paymentNote}</span>
                         )}
                         {inv.pdf_url ? (
                           <a href={inv.pdf_url} target="_blank" rel="noopener noreferrer"
@@ -1051,7 +1051,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                             📎 View Invoice →
                           </a>
                         ) : (
-                          <span className="block mt-0.5 font-mono text-[10px] text-amber-600">No invoice attached</span>
+                          <span className="block mt-0.5 font-mono text-[10px] text-ac-amber">No invoice attached</span>
                         )}
                       </td>
 
@@ -1083,12 +1083,12 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                       </td>
 
                       {/* Bank details */}
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.bankName ?? <span className="text-muted/30">—</span>}</td>
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.sortCode ?? <span className="text-muted/30">—</span>}</td>
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.accNum ?? <span className="text-muted/30">—</span>}</td>
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.accName ?? <span className="text-muted/30">—</span>}</td>
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20 max-w-[130px] truncate`}>{bd.iban ?? <span className="text-muted/30">—</span>}</td>
-                      <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.swift ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.bankName ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.sortCode ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.accNum ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.accName ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60 max-w-[130px] truncate`}>{bd.iban ?? <span className="text-muted/30">—</span>}</td>
+                      <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.swift ?? <span className="text-muted/30">—</span>}</td>
 
                       {/* Invoice attachment */}
                       <td className="px-3 py-2 whitespace-nowrap">
@@ -1129,7 +1129,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                                 if (e.key === 'Enter') void savePaymentNote(inv)
                                 if (e.key === 'Escape') setEditingNoteId(null)
                               }}
-                              className="w-full border border-dashed border-amber-400 bg-amber-50/30 px-1.5 py-0.5 text-[10px] font-mono italic text-amber-800 focus:outline-none"
+                              className="w-full border border-dashed border-ac-amber/40 bg-ac-amber-pale/30 px-1.5 py-0.5 text-[10px] font-mono italic text-ac-amber focus:outline-none"
                               placeholder="💳 Payment note…"
                             />
                           </div>
@@ -1149,7 +1149,7 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
                                   </span>
                                 )}
                                 {paymentNote && (
-                                  <span className="block font-mono text-[10px] text-amber-700 italic truncate max-w-[140px]">💳 {paymentNote}</span>
+                                  <span className="block font-mono text-[10px] text-ac-amber italic truncate max-w-[140px]">💳 {paymentNote}</span>
                                 )}
                               </div>
                             )}
@@ -1187,8 +1187,8 @@ export function PaymentSheet({ project, initialInvoices, costs, reconLinks, upda
           <div className="border-t-2 border-ink bg-cream px-4 py-3 flex flex-wrap gap-8 items-center">
             {[
               { label: 'Grand Total', val: grandTotal, cls: 'text-ink' },
-              { label: 'Outstanding', val: totalOutstanding, cls: totalOutstanding > 0 ? 'text-amber-700' : 'text-muted' },
-              { label: 'Paid', val: totalPaid, cls: 'text-green-700' },
+              { label: 'Outstanding', val: totalOutstanding, cls: totalOutstanding > 0 ? 'text-ac-amber' : 'text-muted' },
+              { label: 'Paid', val: totalPaid, cls: 'text-ac-green' },
             ].map(({ label, val, cls }) => (
               <div key={label}>
                 <p className="font-mono text-[9px] uppercase tracking-widest text-muted">{label}</p>

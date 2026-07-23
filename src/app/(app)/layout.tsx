@@ -32,7 +32,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-paper">
       {/* Sidebar */}
-      <div className="flex flex-col bg-sidebar w-48 flex-shrink-0 border-r border-[#1a1a1a]">
+      <div className="flex flex-col bg-sidebar w-48 flex-shrink-0 border-r border-[#252525]">
         {/* Logo strip */}
         <div className="h-12 flex items-center px-5 border-b border-[#252525] flex-shrink-0">
           <span className="font-sans font-semibold text-white text-sm tracking-tight">AC Ledger</span>

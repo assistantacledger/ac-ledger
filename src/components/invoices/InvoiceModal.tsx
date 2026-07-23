@@ -381,9 +381,9 @@ export function InvoiceModal({
 
           {/* Part-paid amount — shown when status is part-paid */}
           {form.status === 'part-paid' && (
-            <div className="col-span-2 bg-amber-50 border border-amber-200 px-4 py-3 flex items-center gap-4">
+            <div className="col-span-2 bg-ac-amber-pale border border-ac-amber/25 px-4 py-3 flex items-center gap-4">
               <div className="flex-1">
-                <label className="field-label text-amber-800">Amount Paid So Far</label>
+                <label className="field-label">Amount Paid So Far</label>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="font-mono text-sm text-muted">{form.currency}</span>
                   <input
@@ -393,14 +393,14 @@ export function InvoiceModal({
                     min="0"
                     step="0.01"
                     placeholder="0.00"
-                    className="w-36 border border-amber-300 bg-white px-3 py-1.5 text-sm font-mono text-ink focus:outline-none focus:border-amber-600"
+                    className="w-36 border border-ac-amber/30 bg-white px-3 py-1.5 text-sm font-mono text-ink focus:outline-none focus:border-ac-amber"
                   />
                 </div>
               </div>
               {partPaidAmount > 0 && (
                 <div className="text-right">
                   <p className="font-mono text-xs text-muted uppercase tracking-wider">Remaining</p>
-                  <p className="font-mono text-sm font-semibold text-amber-800">
+                  <p className="font-mono text-sm font-semibold text-ac-amber">
                     {fmt(Math.max(0, grandTotal - partPaidAmount), form.currency)}
                   </p>
                 </div>

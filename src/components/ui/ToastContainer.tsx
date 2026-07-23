@@ -42,7 +42,7 @@ export function ToastContainer() {
         >
           {t.type === 'success' && <CheckCircle size={13} className="text-ac-green flex-shrink-0" />}
           {t.type === 'error' && <XCircle size={13} className="text-red-400 flex-shrink-0" />}
-          {t.type === 'info' && <Info size={13} className="text-blue-400 flex-shrink-0" />}
+          {t.type === 'info' && <Info size={13} className="text-[#aaa] flex-shrink-0" />}
           <span className="flex-1">{t.message}</span>
           <button
             onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}

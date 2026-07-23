@@ -135,19 +135,19 @@ function GlobalSearch() {
   }
 
   const kindLabel = { invoice: 'INV', expense: 'EXP', project: 'PRJ' }
-  const kindCls = { invoice: 'text-blue-400', expense: 'text-amber-400', project: 'text-green-400' }
+  const kindCls = { invoice: 'text-[#888]', expense: 'text-ac-amber', project: 'text-ac-green' }
 
   return (
-    <div ref={ref} className="px-4 py-3 border-b border-[#2a2a2a] relative">
+    <div ref={ref} className="px-3 py-3 border-b border-[#252525] relative">
       <div className="relative">
-        <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555]" />
+        <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#4a4a4a]" />
         <input
           type="text"
           value={query}
           onChange={e => { setQuery(e.target.value); setOpen(true) }}
           onFocus={() => setOpen(true)}
           placeholder="Search…"
-          className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#222] border border-[#2a2a2a] text-[#ccc] placeholder:text-[#555] focus:outline-none focus:border-[#555] font-mono"
+          className="w-full pl-7 pr-2 py-1.5 text-xs bg-[#111] border border-transparent text-[#bbb] placeholder:text-[#484848] focus:outline-none focus:border-[#444] font-mono transition-colors duration-150"
         />
         {query && (
           <button onClick={() => { setQuery(''); setOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#555] hover:text-[#aaa]">
@@ -212,12 +212,12 @@ export function Sidebar() {
       </div>
 
       {/* Customize toggle */}
-      <div className="border-t border-[#2a2a2a] px-5 py-3">
+      <div className="border-t border-[#252525] px-5 py-3">
         <button
           onClick={() => setCustomizing(c => !c)}
           className={cn(
-            'flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest transition-colors',
-            customizing ? 'text-[#ddd]' : 'text-[#444] hover:text-[#888]'
+            'flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest transition-colors duration-150',
+            customizing ? 'text-[#ccc]' : 'text-[#444] hover:text-[#777]'
           )}
         >
           <Settings2 size={11} />
@@ -240,7 +240,7 @@ function NavSection({
 }) {
   return (
     <div>
-      <p className="font-mono text-[10px] uppercase tracking-widest text-[#444] px-5 pt-4 pb-1">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-[#4a4a4a] px-5 pt-5 pb-1.5">
         {label}
       </p>
       {items.map(({ href, label, icon: Icon }) => {
@@ -254,15 +254,16 @@ function NavSection({
             <Link
               href={href}
               className={cn(
-                'flex items-center gap-2.5 px-5 py-2 text-sm font-medium transition-all border-l-2 flex-1 min-w-0',
+                'flex items-center gap-2.5 px-5 py-2 text-sm font-medium border-l-2 flex-1 min-w-0',
+                'transition-colors duration-150',
                 isActive
-                  ? 'text-white border-[#888] bg-white/[0.06]'
+                  ? 'text-white border-white bg-white/[0.08]'
                   : hidden.has(href)
-                    ? 'text-[#555] border-transparent hover:text-[#888]'
-                    : 'text-[#888] border-transparent hover:text-[#ddd] hover:bg-white/[0.04]',
+                    ? 'text-[#4a4a4a] border-transparent hover:text-[#888]'
+                    : 'text-[#888] border-transparent hover:text-[#ccc] hover:bg-white/[0.04]',
               )}
             >
-              <Icon size={15} className="flex-shrink-0" />
+              <Icon size={14} className="flex-shrink-0" />
               <span className="truncate">{label}</span>
             </Link>
             {customizing && (

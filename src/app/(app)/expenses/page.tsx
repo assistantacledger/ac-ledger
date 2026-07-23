@@ -548,7 +548,7 @@ a{color:#1a1a1a;text-decoration:underline;font-size:9px}
                               {projectKey !== '—' && (
                                 <button
                                   onClick={() => router.push(`/projects?open=${projectKey}`)}
-                                  className="font-mono text-[9px] text-blue-500 hover:underline"
+                                  className="font-mono text-[9px] text-muted hover:text-ink transition-colors duration-150"
                                 >
                                   View project
                                 </button>

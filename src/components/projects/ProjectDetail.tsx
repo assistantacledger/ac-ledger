@@ -139,7 +139,7 @@ function LinkifiedText({ text }: { text: string }) {
     <span className="whitespace-pre-wrap break-words">
       {parts.map((p, i) =>
         p.type === 'url'
-          ? <a key={i} href={p.val} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:no-underline">{p.val}</a>
+          ? <a key={i} href={p.val} target="_blank" rel="noopener noreferrer" className="text-ink underline underline-offset-2 hover:text-muted transition-colors duration-150">{p.val}</a>
           : <span key={i}>{p.val}</span>
       )}
     </span>
@@ -1354,11 +1354,11 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       .sort((a, b) => b[1].spend - a[1].spend)
                       .map(([cat, { spend, items, hasCosts, hasExpenses }]) => {
                         const sourceLabel = hasCosts && hasExpenses ? 'Costs + Expenses' : hasCosts ? 'Costs only' : 'Expenses only'
-                        const sourceCls = hasCosts && hasExpenses ? 'text-purple-600' : hasCosts ? 'text-ink' : 'text-blue-600'
+                        const sourceCls = hasCosts && hasExpenses ? 'text-ac-amber' : hasCosts ? 'text-ink' : 'text-ac-green'
                         return (
                           <tr
                             key={cat}
-                            className="border-b border-rule last:border-0 hover:bg-amber-50 transition-colors cursor-pointer group"
+                            className="border-b border-rule last:border-0 hover:bg-ac-amber-pale/30 transition-colors cursor-pointer group"
                             title={`Click to filter Costs tab to "${cat}"`}
                             onClick={() => { setCostCategoryFilter(cat); setTab('costs') }}
                           >
@@ -1467,7 +1467,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 <div className="bg-white border border-rule" onClick={() => setLinkingFrom(null)}>
                   <div className="px-4 py-3 border-b border-rule flex items-center gap-3">
                     <p className="tbl-lbl">Cost Reconciliation</p>
-                    <span className="font-mono text-[10px]"><span className="text-ac-green">{matchRows.length} matched</span> · <span className="text-ac-amber">{unmatchedCosts.length} unmatched</span> · <span className="text-blue-500">{unmatchedInvoices.length} unlinked</span></span>
+                    <span className="font-mono text-[10px]"><span className="text-ac-green">{matchRows.length} matched</span> · <span className="text-ac-amber">{unmatchedCosts.length} unmatched</span> · <span className="text-muted">{unmatchedInvoices.length} unlinked</span></span>
                   </div>
 
                   {/* Column labels */}
@@ -1482,7 +1482,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                     const cost = costs.find(c => c.id === costId)!
                     const inv = payableInvoices.find(i => i.id === invoiceId)!
                     return (
-                      <div key={`${costId}-${invoiceId}`} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0 bg-green-50/30">
+                      <div key={`${costId}-${invoiceId}`} className="grid grid-cols-[1fr_32px_1fr] border-b border-rule last:border-0 bg-ac-green-pale/30">
                         <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
                           <div className="w-2 h-2 rounded-full bg-ac-green flex-shrink-0" />
                           <div className="min-w-0 flex-1">
@@ -1585,12 +1585,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       </div>
                       <div className="flex items-center justify-center">
                         <button onClick={e => { e.stopPropagation(); setLinkingFrom(f => f?.id === inv.id ? null : { side: 'invoice', id: inv.id }) }}
-                          title="Link to cost" className="text-muted hover:text-blue-500 transition-colors">
+                          title="Link to cost" className="text-muted hover:text-ink transition-colors duration-150">
                           <Link2Off size={13} />
                         </button>
                       </div>
                       <div className="px-4 py-2.5 flex items-center gap-2 min-w-0">
-                        <div className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" />
+                        <div className="w-2 h-2 bg-rule flex-shrink-0" />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs text-ink truncate">{inv.party}</p>
                           <p className="font-mono text-[10px] text-muted">{inv.ref ? `${inv.ref} · ` : ''}{fmt(inv.amount, inv.currency)}</p>
@@ -1778,7 +1778,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                     <div className="ml-auto">
                       {markAllPaidConfirm ? (
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs text-amber-700">Mark {expUnpaid.length} as paid?</span>
+                          <span className="font-mono text-xs text-ac-amber">Mark {expUnpaid.length} as paid?</span>
                           <button onClick={handleMarkAllExpensesPaid} className="font-mono text-xs px-2 py-1 bg-ac-green text-white hover:opacity-90">Yes</button>
                           <button onClick={() => setMarkAllPaidConfirm(false)} className="font-mono text-xs text-muted hover:text-ink">No</button>
                         </div>
@@ -1857,7 +1857,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       onClick={() => setBulkConfirm(bulkConfirm === 'costs' ? null : 'costs')}
                       className="flex items-center gap-1 font-mono text-xs px-2 py-0.5 border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
                     >
-                      <Zap size={10} className="text-amber-500" />
+                      <Zap size={10} className="text-ac-amber" />
                       Extract All PDFs ({eligibleCosts.length})
                     </button>
                   )}
@@ -1881,14 +1881,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
               {/* Confirm / progress bar for costs bulk extract */}
               {bulkConfirm === 'costs' && (
-                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-3 flex-wrap">
-                  <AlertCircle size={12} className="text-amber-600 flex-shrink-0" />
-                  <span className="font-mono text-xs text-amber-800 flex-1">
+                <div className="px-4 py-2.5 bg-ac-amber-pale border-b border-ac-amber/25 flex items-center gap-3 flex-wrap">
+                  <AlertCircle size={12} className="text-ac-amber flex-shrink-0" />
+                  <span className="font-mono text-xs text-ac-amber flex-1">
                     Extract invoice details from {eligibleCosts.length} attached PDF{eligibleCosts.length !== 1 ? 's' : ''} using AI and save as payable invoices. Continue?
                   </span>
                   <button
                     onClick={() => bulkExtractCosts(eligibleCosts.map(c => c.id))}
-                    className="font-mono text-xs px-2.5 py-1 bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                    className="font-mono text-xs px-2.5 py-1 bg-ac-amber text-white hover:opacity-80 transition-colors"
                   >
                     Yes, extract all
                   </button>
@@ -1896,27 +1896,27 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 </div>
               )}
               {bulkProgress && bulkProgress.mode === 'costs' && (
-                <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-200 flex items-center gap-3">
-                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                  <span className="font-mono text-xs text-blue-800">
+                <div className="px-4 py-2.5 bg-cream border-b border-rule flex items-center gap-3">
+                  <div className="w-3 h-3 border-2 border-ink border-t-transparent animate-spin flex-shrink-0" />
+                  <span className="font-mono text-xs text-muted">
                     Extracting {bulkProgress.current} of {bulkProgress.total}…
                     {bulkProgress.failed.length > 0 && ` (${bulkProgress.failed.length} failed so far)`}
                   </span>
-                  <div className="flex-1 h-1 bg-blue-200 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+                  <div className="flex-1 h-1 bg-rule overflow-hidden">
+                    <div className="h-full bg-ac-green transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
                   </div>
                 </div>
               )}
 
               {costCategoryFilter && (
-                <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
-                  <span className="font-mono text-xs text-amber-800">
+                <div className="px-4 py-2 bg-ac-amber-pale border-b border-ac-amber/25 flex items-center gap-2">
+                  <span className="font-mono text-xs text-ac-amber">
                     Filtering by category: <span className="font-semibold">{costCategoryFilter}</span>
                     {' '}· {displayCosts.length} of {costs.length} items
                   </span>
                   <button
                     onClick={() => setCostCategoryFilter(null)}
-                    className="ml-auto font-mono text-[10px] text-amber-700 hover:text-amber-900 flex items-center gap-1 transition-colors"
+                    className="ml-auto font-mono text-[10px] text-ac-amber hover:opacity-75 flex items-center gap-1 transition-colors"
                   >
                     <X size={10} /> Clear filter
                   </button>
@@ -2104,7 +2104,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       {costBulkFailed.has(cost.id) && (
                                         <button
                                           onClick={e => { e.stopPropagation(); void retryBulkCost(cost.id) }}
-                                          className="inline-flex items-center gap-0.5 font-mono text-[9px] text-amber-600 hover:text-amber-800 transition-colors"
+                                          className="inline-flex items-center gap-0.5 font-mono text-[9px] text-ac-amber hover:text-ac-amber transition-colors"
                                         >
                                           <AlertCircle size={9} /> Failed — Retry
                                         </button>
@@ -2374,7 +2374,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                                     disabled={form.extracting}
                                                     className="flex items-center gap-1 font-mono text-[10px] px-2 py-1 border border-rule text-muted hover:text-ink hover:border-rule transition-colors disabled:opacity-50 bg-cream"
                                                   >
-                                                    <Sparkles size={9} className="text-purple-500" />
+                                                    <Sparkles size={9} className="text-muted" />
                                                     {form.extracting ? 'Extracting…' : 'Extract from PDF with AI'}
                                                   </button>
                                                 )}
@@ -2438,7 +2438,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
                                               {/* Row 2: bank details */}
                                               <div>
-                                                <p className="field-label mb-1.5 text-blue-600">Bank Details</p>
+                                                <p className="field-label mb-1.5">Bank Details</p>
                                                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
                                                   {([
                                                     { key: 'bankName' as const, label: 'Bank Name',    placeholder: 'HSBC' },
@@ -2454,7 +2454,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                                         value={form[key] as string}
                                                         onChange={e => setCostForm(cost.id, { [key]: e.target.value })}
                                                         placeholder={placeholder}
-                                                        className="w-full border border-rule bg-blue-50/30 px-2 py-1 text-xs font-mono text-ink focus:outline-none focus:border-blue-300"
+                                                        className="w-full border border-rule bg-paper px-2 py-1 text-xs font-mono text-ink focus:outline-none focus:border-ink"
                                                       />
                                                     </div>
                                                   ))}
@@ -2636,7 +2636,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 <div
                   className={cn(
                     'p-4 transition-colors',
-                    dragOver ? 'bg-blue-50 border-blue-300' : ''
+                    dragOver ? 'bg-ac-green-pale' : ''
                   )}
                   onDragOver={e => { e.preventDefault(); setDragOver(true) }}
                   onDragLeave={() => setDragOver(false)}
@@ -2737,7 +2737,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                       onClick={() => setBulkConfirm(bulkConfirm === 'files' ? null : 'files')}
                       className="flex items-center gap-1 font-mono text-xs px-2 py-0.5 border border-rule text-muted hover:text-ink hover:border-ink transition-colors"
                     >
-                      <Zap size={10} className="text-amber-500" />
+                      <Zap size={10} className="text-ac-amber" />
                       Extract All PDFs ({eligibleFiles.length})
                     </button>
                   )}
@@ -2754,14 +2754,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
               {/* Confirm / progress for files bulk extract */}
               {bulkConfirm === 'files' && (
-                <div className="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 flex items-center gap-3 flex-wrap">
-                  <AlertCircle size={12} className="text-amber-600 flex-shrink-0" />
-                  <span className="font-mono text-xs text-amber-800 flex-1">
+                <div className="mb-3 px-4 py-2.5 bg-ac-amber-pale border border-ac-amber/25 flex items-center gap-3 flex-wrap">
+                  <AlertCircle size={12} className="text-ac-amber flex-shrink-0" />
+                  <span className="font-mono text-xs text-ac-amber flex-1">
                     Extract invoice details from {eligibleFiles.length} file{eligibleFiles.length !== 1 ? 's' : ''} using AI. Continue?
                   </span>
                   <button
                     onClick={() => bulkExtractFiles(eligibleFiles.map(f => f.id))}
-                    className="font-mono text-xs px-2.5 py-1 bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                    className="font-mono text-xs px-2.5 py-1 bg-ac-amber text-white hover:opacity-80 transition-colors"
                   >
                     Yes, extract all
                   </button>
@@ -2769,13 +2769,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 </div>
               )}
               {bulkProgress && bulkProgress.mode === 'files' && (
-                <div className="mb-3 px-4 py-2.5 bg-blue-50 border border-blue-200 flex items-center gap-3">
-                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                  <span className="font-mono text-xs text-blue-800">
+                <div className="mb-3 px-4 py-2.5 bg-cream border border-rule flex items-center gap-3">
+                  <div className="w-3 h-3 border-2 border-ink border-t-transparent animate-spin flex-shrink-0" />
+                  <span className="font-mono text-xs text-muted">
                     Extracting {bulkProgress.current} of {bulkProgress.total}…
                   </span>
-                  <div className="flex-1 h-1 bg-blue-200 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
+                  <div className="flex-1 h-1 bg-rule overflow-hidden">
+                    <div className="h-full bg-ac-green transition-all" style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }} />
                   </div>
                 </div>
               )}
@@ -2800,7 +2800,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
                   {files.map(f => (
-                    <div key={f.id} className={cn('group relative border bg-white overflow-hidden', fileBulkFailed.has(f.id) ? 'border-amber-300' : 'border-rule')}>
+                    <div key={f.id} className={cn('group relative border bg-white overflow-hidden', fileBulkFailed.has(f.id) ? 'border-ac-amber/30' : 'border-rule')}>
                       <button
                         className="w-full aspect-square flex items-center justify-center bg-cream hover:bg-cream/80 transition-colors relative"
                         onClick={() => f.type === 'image' ? setLightboxUrl({ url: f.url, name: f.name }) : window.open(f.url, '_blank')}
@@ -2842,7 +2842,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         {fileBulkFailed.has(f.id) && (
                           <button
                             onClick={() => void retryBulkFile(f.id)}
-                            className="font-mono text-[9px] text-amber-600 hover:text-amber-800 transition-colors w-full text-left"
+                            className="font-mono text-[9px] text-ac-amber hover:text-ac-amber transition-colors w-full text-left"
                           >
                             ⚠ Failed — Retry
                           </button>

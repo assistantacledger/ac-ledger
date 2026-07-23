@@ -122,7 +122,7 @@ export default function BalancesPage() {
             { label: 'To Receive', value: stats.totalRec, accent: '#3a7a5a', sub: 'open receivables' },
             { label: 'To Pay', value: stats.totalPay, accent: '#7a6a3a', sub: 'open payables' },
             { label: 'Net Position', value: stats.net, accent: stats.net >= 0 ? '#3a7a5a' : '#dc2626', sub: stats.net >= 0 ? 'favourable' : 'deficit' },
-            { label: 'Overdue', value: stats.overdueAmt, accent: stats.overdueCount > 0 ? '#dc2626' : '#2a2a2a', sub: `${stats.overdueCount} invoice${stats.overdueCount !== 1 ? 's' : ''}` },
+            { label: 'Overdue', value: stats.overdueAmt, accent: stats.overdueCount > 0 ? '#dc2626' : '#1a1a1a', sub: `${stats.overdueCount} invoice${stats.overdueCount !== 1 ? 's' : ''}` },
           ].map(({ label, value, accent, sub }) => (
             <div
               key={label}

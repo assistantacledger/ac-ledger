@@ -688,7 +688,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
 
     const rowCls = cn(
       'border-b border-rule last:border-0 transition-colors group',
-      isSelected ? 'bg-blue-50/50' : isPri ? 'bg-orange-50/40' : paid ? 'bg-paper/60' : overdue ? 'bg-red-50/40' : idx % 2 === 1 ? 'bg-white' : 'bg-paper/20'
+      isSelected ? 'bg-ac-green-pale/40' : isPri ? 'bg-ac-amber-pale/40' : paid ? 'bg-paper/60' : overdue ? 'bg-red-50/40' : idx % 2 === 1 ? 'bg-white' : 'bg-paper/20'
     )
     const monoSmall = `font-mono text-[10px] ${paid ? 'text-muted/70' : 'text-muted'}`
 
@@ -716,7 +716,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
             title={paid ? 'Mark as unpaid' : 'Mark as paid'}
             className={cn('w-5 h-5 flex items-center justify-center border-2 transition-all mx-auto',
               marking ? 'opacity-40' : '',
-              paid ? 'bg-green-500 border-green-500' : 'border-rule hover:border-ink')}>
+              paid ? 'bg-ac-green border-ac-green' : 'border-rule hover:border-ink')}>
             {paid && <Check size={11} className="text-white" />}
           </button>
         </td>
@@ -724,10 +724,10 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
         {/* Supplier */}
         <td className="px-3 py-2">
           <span className={cn('font-semibold text-sm', paid ? 'text-muted line-through' : 'text-ink')}>{inv.party}</span>
-          {paymentNote && <span className="block mt-0.5 font-mono text-[10px] text-amber-700 italic">💳 {paymentNote}</span>}
+          {paymentNote && <span className="block mt-0.5 font-mono text-[10px] text-ac-amber italic">💳 {paymentNote}</span>}
           {inv.pdf_url
             ? <a href={inv.pdf_url} target="_blank" rel="noopener noreferrer" className="block mt-0.5 font-mono text-[10px] text-muted hover:text-ink transition-colors">📎 View →</a>
-            : <span className="block mt-0.5 font-mono text-[10px] text-amber-600">No invoice attached</span>}
+            : <span className="block mt-0.5 font-mono text-[10px] text-ac-amber">No invoice attached</span>}
         </td>
 
         {/* Ref */}
@@ -746,9 +746,9 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
         {/* Entity */}
         <td className="px-3 py-2">
           <span className={cn('font-mono text-[10px] px-1.5 py-0.5 uppercase tracking-wider',
-            inv.entity === 'Actually Creative' ? 'bg-ink/10 text-ink' :
-            inv.entity === '419Studios' ? 'bg-blue-100 text-blue-800' :
-            'bg-purple-100 text-purple-800'
+            inv.entity === 'Actually Creative' ? 'bg-cream text-ink' :
+            inv.entity === '419Studios' ? 'bg-ac-amber-pale text-ac-amber' :
+            'bg-rule text-muted'
           )}>
             {ENTITY_SHORT[inv.entity as Entity] ?? inv.entity}
           </span>
@@ -766,12 +766,12 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
         </td>
 
         {/* Bank details */}
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.bankName ?? <span className="text-muted/30">—</span>}</td>
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.sortCode ?? <span className="text-muted/30">—</span>}</td>
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.accNum ?? <span className="text-muted/30">—</span>}</td>
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.accName ?? <span className="text-muted/30">—</span>}</td>
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20 max-w-[120px] truncate`}>{bd.iban ?? <span className="text-muted/30">—</span>}</td>
-        <td className={`px-3 py-2 ${monoSmall} bg-blue-50/20`}>{bd.swift ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.bankName ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.sortCode ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.accNum ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.accName ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60 max-w-[120px] truncate`}>{bd.iban ?? <span className="text-muted/30">—</span>}</td>
+        <td className={`px-3 py-2 ${monoSmall} bg-cream/60`}>{bd.swift ?? <span className="text-muted/30">—</span>}</td>
 
         {/* Invoice */}
         <td className="px-3 py-2 whitespace-nowrap">
@@ -797,7 +797,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
               <input value={payNoteValue} onChange={e => setPayNoteValue(e.target.value)}
                 onBlur={() => void savePaymentNote(inv)}
                 onKeyDown={e => { if (e.key === 'Enter') void savePaymentNote(inv); if (e.key === 'Escape') setEditingNoteId(null) }}
-                className="w-full border border-dashed border-amber-400 bg-amber-50/30 px-1.5 py-0.5 text-[10px] font-mono italic text-amber-800 focus:outline-none"
+                className="w-full border border-dashed border-ac-amber/40 bg-ac-amber-pale/30 px-1.5 py-0.5 text-[10px] font-mono italic text-ac-amber focus:outline-none"
                 placeholder="💳 Payment note…" />
             </div>
           ) : (
@@ -807,7 +807,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
                 ? <span className="text-muted/20 group-hover:text-muted/50 text-[10px] font-mono transition-colors">+ note</span>
                 : <div>
                     {notes && <span className="font-mono text-[10px] text-ink flex items-center gap-1">📝 <span className="truncate max-w-[120px] inline-block">{notes}</span></span>}
-                    {paymentNote && <span className="block font-mono text-[10px] text-amber-700 italic truncate max-w-[120px]">💳 {paymentNote}</span>}
+                    {paymentNote && <span className="block font-mono text-[10px] text-ac-amber italic truncate max-w-[120px]">💳 {paymentNote}</span>}
                   </div>}
             </button>
           )}
@@ -880,9 +880,9 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
 
       {/* ── Missing invoices badge ── */}
       {missingCount > 0 && (
-        <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 px-4 py-2.5">
-          <Paperclip size={12} className="text-amber-600 flex-shrink-0" />
-          <span className="font-mono text-xs text-amber-800">
+        <div className="flex items-center gap-2 bg-ac-amber-pale border border-ac-amber/30 px-4 py-2.5">
+          <Paperclip size={12} className="text-ac-amber flex-shrink-0" />
+          <span className="font-mono text-xs text-ac-amber">
             {missingCount} invoice{missingCount !== 1 ? 's' : ''} in current view have no attachment
           </span>
         </div>
@@ -1084,12 +1084,12 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
                   <TH cls="cursor-pointer hover:text-ink select-none">
                     <span onClick={() => toggleSort('due')}>Due Date <SortIcon k="due" /></span>
                   </TH>
-                  <TH cls="bg-blue-50/80">Bank Name</TH>
-                  <TH cls="bg-blue-50/80">Sort Code</TH>
-                  <TH cls="bg-blue-50/80">Acc No</TH>
-                  <TH cls="bg-blue-50/80">Acc Name</TH>
-                  <TH cls="bg-blue-50/80">IBAN</TH>
-                  <TH cls="bg-blue-50/80">SWIFT</TH>
+                  <TH cls="bg-cream">Bank Name</TH>
+                  <TH cls="bg-cream">Sort Code</TH>
+                  <TH cls="bg-cream">Acc No</TH>
+                  <TH cls="bg-cream">Acc Name</TH>
+                  <TH cls="bg-cream">IBAN</TH>
+                  <TH cls="bg-cream">SWIFT</TH>
                   <TH cls="w-20">Invoice</TH>
                   <TH cls="cursor-pointer hover:text-ink select-none">
                     <span onClick={() => toggleSort('status')}>Status <SortIcon k="status" /></span>
@@ -1118,7 +1118,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
                           </td>
                           <td colSpan={7} />
                           <td colSpan={3} className="px-3 py-2 text-right">
-                            <span className="font-mono text-xs font-bold text-amber-700">{fmt(groupOutstanding)} outstanding</span>
+                            <span className="font-mono text-xs font-bold text-ac-amber">{fmt(groupOutstanding)} outstanding</span>
                             {groupTotal !== groupOutstanding && <span className="ml-3 font-mono text-xs text-muted">{fmt(groupTotal)} total</span>}
                           </td>
                         </tr>
@@ -1136,7 +1136,7 @@ export function MasterPaymentSheet({ updateInvoice }: MasterPaymentSheetProps) {
           {/* Totals footer */}
           <div className="border-t-2 border-ink bg-cream px-4 py-3 flex flex-wrap gap-8 items-center">
             {[
-              { label: 'Outstanding', val: displayedOutstanding.reduce((t, i) => t + Number(i.amount), 0), cls: 'text-amber-700' },
+              { label: 'Outstanding', val: displayedOutstanding.reduce((t, i) => t + Number(i.amount), 0), cls: 'text-ac-amber' },
               { label: 'Overdue', val: displayedOverdue.reduce((t, i) => t + Number(i.amount), 0), cls: 'text-red-600' },
               { label: 'All Displayed', val: displayed.reduce((t, i) => t + Number(i.amount), 0), cls: 'text-ink' },
             ].map(({ label, val, cls }) => (

@@ -477,9 +477,9 @@ export function ProjectImport({
       {(step === 'drop' || step === 'extracting') && (
         <div className="px-6 py-8">
           {!getApiKey() && (
-            <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 flex items-center gap-2">
-              <AlertCircle size={13} className="text-amber-600 flex-shrink-0" />
-              <p className="font-mono text-xs text-amber-800">
+            <div className="mb-4 px-4 py-3 bg-ac-amber-pale border border-ac-amber/25 flex items-center gap-2">
+              <AlertCircle size={13} className="text-ac-amber flex-shrink-0" />
+              <p className="font-mono text-xs text-ac-amber">
                 Please add your Anthropic API key in <strong>Settings</strong> first.
               </p>
             </div>
@@ -801,8 +801,8 @@ export function ProjectImport({
                     </div>
                     {/* Bank details (expanded) */}
                     {inv._expanded && (
-                      <div className="border-t border-rule px-2 pb-2 pt-2 bg-blue-50/30">
-                        <p className="field-label text-blue-600 mb-1.5">Bank Details</p>
+                      <div className="border-t border-rule px-2 pb-2 pt-2 bg-paper">
+                        <p className="field-label mb-1.5">Bank Details</p>
                         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                           {([
                             { k: 'bankName' as const, label: 'Bank Name', placeholder: 'HSBC' },
@@ -838,15 +838,15 @@ export function ProjectImport({
 
           {/* ── Uncertain data ── */}
           {uncertain.length > 0 && (
-            <div className="px-5 py-4 bg-amber-50/60">
+            <div className="px-5 py-4 bg-ac-amber-pale/60">
               <div className="flex items-center gap-2 mb-2">
-                <AlertCircle size={12} className="text-amber-600 flex-shrink-0" />
-                <p className="tbl-lbl text-amber-800">Unrecognised / uncertain data — review manually</p>
+                <AlertCircle size={12} className="text-ac-amber flex-shrink-0" />
+                <p className="tbl-lbl text-ac-amber">Unrecognised / uncertain data — review manually</p>
               </div>
               <ul className="space-y-1">
                 {uncertain.map((u, i) => (
-                  <li key={i} className="font-mono text-xs text-amber-800 flex items-start gap-1.5">
-                    <span className="mt-0.5 flex-shrink-0 text-amber-500">·</span>
+                  <li key={i} className="font-mono text-xs text-ac-amber flex items-start gap-1.5">
+                    <span className="mt-0.5 flex-shrink-0 text-ac-amber">·</span>
                     <span>{u}</span>
                   </li>
                 ))}

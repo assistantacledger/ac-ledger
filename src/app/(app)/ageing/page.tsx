@@ -9,8 +9,8 @@ import { ENTITIES } from '@/types'
 
 const BUCKETS = [
   { label: '1–30 days', min: 1, max: 30, accent: '#7a6a3a' },
-  { label: '31–60 days', min: 31, max: 60, accent: '#d97706' },
-  { label: '61–90 days', min: 61, max: 90, accent: '#dc5a26' },
+  { label: '31–60 days', min: 31, max: 60, accent: '#b05a3a' },
+  { label: '61–90 days', min: 61, max: 90, accent: '#c03030' },
   { label: '90+ days', min: 91, max: Infinity, accent: '#dc2626' },
 ]
 
@@ -69,11 +69,11 @@ export default function AgeingPage() {
 
         {/* Grand total banner */}
         {!loading && overdue.length > 0 && (
-          <div className="mb-5 border-2 border-red-200 bg-red-50 px-5 py-3 flex items-center justify-between">
-            <span className="font-mono text-xs uppercase tracking-wider text-red-700">
+          <div className="mb-5 tbl-card px-5 py-3 flex items-center justify-between" style={{ borderTopColor: '#dc2626' }}>
+            <span className="font-mono text-xs uppercase tracking-widest text-muted">
               Total overdue · {overdue.length} invoice{overdue.length !== 1 ? 's' : ''}
             </span>
-            <span className="font-mono text-lg font-semibold text-red-700">{fmt(grandTotal)}</span>
+            <span className="font-mono text-lg font-semibold" style={{ color: '#dc2626' }}>{fmt(grandTotal)}</span>
           </div>
         )}
 
@@ -108,7 +108,7 @@ export default function AgeingPage() {
                     {b.rows.sort((a, c) => daysOverdue(c.due) - daysOverdue(a.due)).map(inv => {
                       const od = daysOverdue(inv.due)
                       return (
-                        <tr key={inv.id} className="border-b border-rule last:border-0 hover:bg-cream/70 transition-colors">
+                        <tr key={inv.id} className="border-b border-rule last:border-0 hover:bg-cream/70 transition-colors duration-150">
                           <td className="px-5 py-2.5 font-mono text-xs text-ink">{inv.ref || '—'}</td>
                           <td className="px-3 py-2.5 text-sm text-ink max-w-[180px] truncate">{inv.party}</td>
                           <td className="px-3 py-2.5 hidden lg:table-cell font-mono text-[10px] text-muted uppercase tracking-wider">

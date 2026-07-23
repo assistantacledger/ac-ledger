@@ -602,8 +602,8 @@ export function ProjectWhiteboard({ projectCode }: Props) {
         {/* Save indicator */}
         <div className="flex items-center gap-1 font-mono text-[10px]">
           {saved
-            ? <><Save size={10} className="text-green-600" /><span className="text-green-600">Saved</span></>
-            : <><Save size={10} className="text-amber-500 animate-pulse" /><span className="text-amber-500">Unsaved</span></>
+            ? <><Save size={10} className="text-ac-green" /><span className="text-ac-green">Saved</span></>
+            : <><Save size={10} className="text-ac-amber animate-pulse" /><span className="text-ac-amber">Unsaved</span></>
           }
         </div>
       </div>

@@ -289,10 +289,10 @@ export function InvoiceTable({
                   <tr
                     key={inv.id}
                     className={cn(
-                      'border-b border-rule last:border-0 transition-colors group',
-                      idx % 2 === 1 ? 'bg-paper/40' : '',
+                      'border-b border-rule last:border-0 transition-colors duration-150 group',
+                      idx % 2 === 1 && 'bg-paper/40',
                       'hover:bg-cream/70',
-                      selected.has(inv.id) && 'bg-blue-50/50'
+                      selected.has(inv.id) && 'bg-ac-green-pale/30'
                     )}
                   >
                     {onBulkMarkPaid && (
