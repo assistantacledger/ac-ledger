@@ -102,7 +102,7 @@ const COST_STATUS_CLS: Record<CostStatus, string> = {
   paid: 'badge-paid',
 }
 
-type CostSortKey = 'description' | 'category' | 'qty' | 'estimated' | 'actual' | 'status' | 'dueDate' | 'hasInvoice'
+type CostSortKey = 'description' | 'category' | 'qty' | 'estimated' | 'actual' | 'status' | 'due_date' | 'hasInvoice'
 type ReconLinks = { manual: { costId: string; invoiceId: string }[]; broken: { costId: string; invoiceId: string }[] }
 const EMPTY_LINKS: ReconLinks = { manual: [], broken: [] }
 
@@ -190,7 +190,7 @@ interface Props {
   deleteExpense?: (id: string) => Promise<void>
   anthropicKey?: string
   projects?: Project[]
-  createProject?: (data: Omit<Project, 'createdAt'>) => Project
+  createProject?: (data: Omit<Project, 'id' | 'created_at'>) => Promise<Project>
 }
 
 export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onDelete, createExpense, createInvoice, updateInvoice, markInvoicePaid, updateExpense, deleteExpense, anthropicKey, projects, createProject }: Props) {
@@ -333,7 +333,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         internal: null,
         line_items: null,
         recurring: false,
-        pdf_url: cost.receiptUrl ?? null,
+        pdf_url: cost.receipt_url ?? null,
         payment_schedule: null,
         bank_details: bankDetails,
       }
@@ -363,10 +363,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   async function extractCostPdf(costId: string) {
     if (!anthropicKey) { toast('Anthropic API key not set — add it in Settings', 'error'); return }
     const cost = costs.find(c => c.id === costId)
-    if (!cost?.receiptUrl) return
+    if (!cost?.receipt_url) return
     setCostForm(costId, { extracting: true, open: true })
     try {
-      const response = await fetch(cost.receiptUrl)
+      const response = await fetch(cost.receipt_url)
       const blob = await response.blob()
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
@@ -497,17 +497,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       const costId = costIds[i]
       setBulkProgress({ mode: 'costs', total: costIds.length, current: i + 1, failed: [...failed] })
       const cost = costs.find(c => c.id === costId)
-      if (!cost?.receiptUrl) {
+      if (!cost?.receipt_url) {
         failed.push(costId)
         setCostBulkFailed(prev => { const n = new Set(Array.from(prev)); n.add(costId); return n })
         continue
       }
       try {
-        const ext = await extractFromUrl(cost.receiptUrl, cost.receiptType === 'image' ? 'image/jpeg' : 'application/pdf')
+        const ext = await extractFromUrl(cost.receipt_url, cost.receipt_type === 'image' ? 'image/jpeg' : 'application/pdf')
         if (!ext) throw new Error('No data')
         const created = await saveExtractedInvoice(ext, {
           defaultParty: cost.description,
-          pdfUrl: cost.receiptUrl,
+          pdfUrl: cost.receipt_url,
           notes: `Cost: ${cost.description}`,
         })
         addManualLink(costId, created.id)
@@ -596,11 +596,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   const code = project.code
 
-  // Load from localStorage
+  // Load from Supabase
   useEffect(() => {
-    setNotes(lsGet<ProjectNote[]>(`project_notes_${code}`, []))
-    setFiles(lsGet<ProjectFile[]>(`project_files_${code}`, []))
-    setCosts(lsGet<ProjectCost[]>(`project_costs_${code}`, []))
+    // Load notes
+    sb.from('project_notes').select('*').eq('project_code', code).order('created_at', { ascending: false })
+      .then(({ data }) => { if (data) setNotes(data as ProjectNote[]) })
+    // Load files
+    sb.from('project_files').select('*').eq('project_code', code).order('uploaded_at', { ascending: false })
+      .then(({ data }) => { if (data) setFiles(data as ProjectFile[]) })
+    // Load costs
+    sb.from('project_costs').select('*').eq('project_code', code).order('sort_order', { ascending: true })
+      .then(({ data }) => { if (data) setCosts(data as ProjectCost[]) })
+
+    // UI-only state stays in localStorage
     setReconLinks(lsGet<ReconLinks>(`project_cost_links_${code}`, EMPTY_LINKS))
     setProcessedFileIds(new Set(Array.from(lsGet<string[]>(`project_file_scanned_${code}`, []))))
     setBulkProgress(null)
@@ -637,14 +645,14 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // ── Financial summary ──
   const totalExpenses = projExpenses.reduce((t, e) => t + Number(e.total), 0)
   // Exclude employee costs promoted to Supabase expenses (avoid double-counting)
-  const totalCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + costTotal(c), 0)
+  const totalCosts = costs.filter(c => !c.expense_id).reduce((t, c) => t + costTotal(c), 0)
   // Total spend = direct costs + employee expenses
   const totalSpend = totalCosts + totalExpenses
 
   // ── Combined spending by category (costs + expense line items) ──
   const spendByCategory = useMemo(() => {
     const map = new Map<string, { spend: number; items: number; hasCosts: boolean; hasExpenses: boolean }>()
-    for (const cost of costs.filter(c => !c.expenseId)) {
+    for (const cost of costs.filter(c => !c.expense_id)) {
       const cat = cost.category
       const cur = map.get(cat) ?? { spend: 0, items: 0, hasCosts: false, hasExpenses: false }
       map.set(cat, { spend: cur.spend + costTotal(cost), items: cur.items + 1, hasCosts: true, hasExpenses: cur.hasExpenses })
@@ -670,20 +678,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   }
 
   // ── Notes ──
-  function saveNote() {
-    if (!noteText.trim()) return
-    const entry: ProjectNote = { id: crypto.randomUUID(), text: noteText.trim(), createdAt: new Date().toISOString() }
-    const updated = [entry, ...notes]
-    setNotes(updated)
-    lsSet(`project_notes_${code}`, updated)
+  async function saveNote() {
+    const trimmed = noteText.trim()
+    if (!trimmed) return
+    const now = new Date().toISOString()
+    const { data, error } = await sb.from('project_notes').insert({
+      project_code: code,
+      text: trimmed,
+      created_at: now,
+    }).select().single()
+    if (!error && data) {
+      setNotes(prev => [data as ProjectNote, ...prev])
+    }
     setNoteText('')
     setAddingNote(false)
   }
 
-  function deleteNote(id: string) {
-    const updated = notes.filter(n => n.id !== id)
-    setNotes(updated)
-    lsSet(`project_notes_${code}`, updated)
+  async function deleteNote(id: string) {
+    await sb.from('project_notes').delete().eq('id', id)
+    setNotes(prev => prev.filter(n => n.id !== id))
   }
 
   // ── Files ──
@@ -699,17 +712,19 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: false })
       if (error) throw error
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
-      const entry: ProjectFile = {
-        id: crypto.randomUUID(),
+      const now = new Date().toISOString()
+      const fileType: 'image' | 'pdf' = file.type.startsWith('image/') ? 'image' : 'pdf'
+      const { data: fileRow, error: dbError } = await sb.from('project_files').insert({
+        project_code: code,
         name: file.name,
         url: urlData.publicUrl,
-        type: file.type.startsWith('image/') ? 'image' : 'pdf',
-        uploadedAt: new Date().toISOString(),
+        type: fileType,
         path,
+        uploaded_at: now,
+      }).select().single()
+      if (!dbError && fileRow) {
+        setFiles(prev => [fileRow as ProjectFile, ...prev])
       }
-      const updated = [entry, ...files]
-      setFiles(updated)
-      lsSet(`project_files_${code}`, updated)
     } catch (e) {
       alert(`Upload failed: ${String(e)}`)
     } finally {
@@ -727,29 +742,36 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     try {
       await sb.storage.from('invoices').remove([f.path])
     } catch { /* ignore storage errors — remove from list anyway */ }
-    const updated = files.filter(x => x.id !== f.id)
-    setFiles(updated)
-    lsSet(`project_files_${code}`, updated)
+    await sb.from('project_files').delete().eq('id', f.id)
+    setFiles(prev => prev.filter(x => x.id !== f.id))
     setDeleteConfirmFile(null)
   }
 
   // ── Costs ──
-  function saveCosts(updated: ProjectCost[]) {
+  async function saveCosts(updated: ProjectCost[]) {
     setCosts(updated)
-    lsSet(`project_costs_${code}`, updated)
+    // Upsert all rows with updated sort_order
+    const rows = updated.map((c, i) => ({ ...c, project_code: code, sort_order: i }))
+    if (rows.length > 0) {
+      await sb.from('project_costs').upsert(rows, { onConflict: 'id' })
+    }
   }
 
-  function addCost() {
+  async function addCost() {
     if (!newCost.description.trim()) return
     const total = costTotal(newCost)
-    const entry: ProjectCost = { id: crypto.randomUUID(), ...newCost, actual: total }
-    saveCosts([...costs, entry])
+    const id = crypto.randomUUID()
+    const entry: ProjectCost = { id, ...newCost, actual: total, project_code: code, sort_order: costs.length }
+    const { data, error } = await sb.from('project_costs').insert(entry).select().single()
+    if (!error && data) {
+      setCosts(prev => [...prev, data as ProjectCost])
+    }
     setNewCost({ description: '', category: 'Other', qty: 1, estimated: 0, actual: 0, status: 'planned', notes: '' })
     setAddingCost(false)
   }
 
   function updateCost(id: string, patch: Partial<ProjectCost>) {
-    saveCosts(costs.map(c => {
+    void saveCosts(costs.map(c => {
       if (c.id !== id) return c
       const updated = { ...c, ...patch }
       // Auto-update actual (total) when qty or unit price changes
@@ -760,8 +782,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     }))
   }
 
-  function deleteCost(id: string) {
-    saveCosts(costs.filter(c => c.id !== id))
+  async function deleteCost(id: string) {
+    await sb.from('project_costs').delete().eq('id', id)
+    setCosts(prev => prev.filter(c => c.id !== id))
     if (editingCost === id) setEditingCost(null)
   }
 
@@ -771,7 +794,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     const reordered = Array.from(displayCosts)
     const [removed] = reordered.splice(result.source.index, 1)
     reordered.splice(result.destination.index, 0, removed)
-    saveCosts(reordered)
+    void saveCosts(reordered)
   }
 
   // Receipt upload per cost
@@ -788,9 +811,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       if (error) throw error
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
       updateCost(costId, {
-        receiptUrl: urlData.publicUrl,
-        receiptPath: path,
-        receiptType: file.type.startsWith('image/') ? 'image' : 'pdf',
+        receipt_url: urlData.publicUrl,
+        receipt_path: path,
+        receipt_type: file.type.startsWith('image/') ? 'image' : 'pdf',
       })
     } catch (e) {
       alert(`Upload failed: ${String(e)}`)
@@ -814,20 +837,20 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   async function removeCostReceipt(costId: string) {
     const cost = costs.find(c => c.id === costId)
-    if (!cost?.receiptPath) return
-    try { await sb.storage.from('invoices').remove([cost.receiptPath]) } catch { /* ignore */ }
-    updateCost(costId, { receiptUrl: undefined, receiptPath: undefined, receiptType: undefined })
+    if (!cost?.receipt_path) return
+    try { await sb.storage.from('invoices').remove([cost.receipt_path]) } catch { /* ignore */ }
+    updateCost(costId, { receipt_url: undefined, receipt_path: undefined, receipt_type: undefined })
   }
 
   // Create Supabase expense from cost
   async function handleCreateExpense(costId: string) {
     const cost = costs.find(c => c.id === costId)
-    if (!cost?.employeeName?.trim()) return
+    if (!cost?.employee_name?.trim()) return
     setCreatingExpense(costId)
     try {
       const amount = costTotal(cost)
       const data: ExpenseInsert = {
-        employee: cost.employeeName,
+        employee: cost.employee_name,
         date: todayISO(),
         entity: project.entity,
         status: 'submitted',
@@ -835,12 +858,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         project_name: project.name,
         notes: cost.description,
         line_items: [{ description: cost.description, category: 'Other', amount }],
-        receipt_urls: cost.receiptUrl ? [cost.receiptUrl] : null,
+        receipt_urls: cost.receipt_url ? [cost.receipt_url] : null,
         bank_details: null,
         total: amount,
       }
       const created = await createExpense(data)
-      updateCost(costId, { expenseId: created.id })
+      updateCost(costId, { expense_id: created.id })
       toast('Expense created — see Expenses tab')
     } catch (e) {
       toast(`Failed to create expense: ${String(e)}`, 'error')
@@ -862,9 +885,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         c.estimated,
         total,
         c.status,
-        c.dueDate ?? '',
-        c.employeeName ?? '',
-        c.receiptUrl ?? '',
+        c.due_date ?? '',
+        c.employee_name ?? '',
+        c.receipt_url ?? '',
         `"${(c.notes ?? '').replace(/"/g, '""')}"`,
       ].join(',')
     })
@@ -900,8 +923,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       else if (costSortKey === 'estimated') { av = a.estimated; bv = b.estimated }
       else if (costSortKey === 'actual') { av = costTotal(a); bv = costTotal(b) }
       else if (costSortKey === 'status') { av = a.status; bv = b.status }
-      else if (costSortKey === 'dueDate') { av = a.dueDate ?? ''; bv = b.dueDate ?? '' }
-      else if (costSortKey === 'hasInvoice') { av = a.expenseId ? 1 : 0; bv = b.expenseId ? 1 : 0 }
+      else if (costSortKey === 'due_date') { av = a.due_date ?? ''; bv = b.due_date ?? '' }
+      else if (costSortKey === 'hasInvoice') { av = a.expense_id ? 1 : 0; bv = b.expense_id ? 1 : 0 }
       if (av < bv) return costSortDir === 'asc' ? -1 : 1
       if (av > bv) return costSortDir === 'asc' ? 1 : -1
       return 0
@@ -941,6 +964,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     const costStatus: CostStatus = inv.status === 'paid' ? 'paid' : 'confirmed'
     const entry: ProjectCost = {
       id: crypto.randomUUID(),
+      project_code: code,
       description: [inv.party, inv.ref].filter(Boolean).join(' — '),
       category: 'Other',
       qty: 1,
@@ -949,7 +973,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       status: costStatus,
       notes: `From invoice ${inv.ref ?? inv.id.slice(0, 8)}`,
     }
-    saveCosts([...costs, entry])
+    void saveCosts([...costs, entry])
     toast(`Added "${entry.description}" to costs`)
   }
 
@@ -1054,23 +1078,23 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       for (const row of rows) {
         if (!row.name.trim()) continue
         const cost = costs.find(c => c.id === row.costId)
-        if (!cost || cost.expenseId) continue
+        if (!cost || cost.expense_id) continue
         const amount = costTotal(cost)
         const data: ExpenseInsert = {
           employee: row.name,
-          date: cost.dueDate ?? todayISO(),
+          date: cost.due_date ?? todayISO(),
           entity: project.entity,
           status: 'submitted',
           project_code: project.code,
           project_name: project.name,
           notes: cost.description,
           line_items: [{ description: cost.description, category: 'Other', amount }],
-          receipt_urls: cost.receiptUrl ? [cost.receiptUrl] : null,
+          receipt_urls: cost.receipt_url ? [cost.receipt_url] : null,
           bank_details: null,
           total: amount,
         }
         const created = await createExpense(data)
-        updateCost(row.costId, { expenseId: created.id, isEmployeeCost: true, employeeName: row.name })
+        updateCost(row.costId, { expense_id: created.id, is_employee_expense: true, employee_name: row.name })
       }
       toast(`Created ${rows.length} expense${rows.length !== 1 ? 's' : ''}`)
       setCostSelectedIds(new Set())
@@ -1197,7 +1221,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // ─── Render ───────────────────────────────────────────────────────────────
 
   const payableCount = projInvoices.filter(i => i.type === 'payable').length
-  const eligibleCosts = costs.filter(c => c.receiptUrl && !reconLinks.manual.find(m => m.costId === c.id))
+  const eligibleCosts = costs.filter(c => c.receipt_url && !reconLinks.manual.find(m => m.costId === c.id))
   const eligibleFiles = files.filter(f => (f.type === 'pdf' || f.type === 'image') && !processedFileIds.has(f.id))
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview',       label: 'Overview' },
@@ -1405,7 +1429,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 {[
                   { label: 'Code', val: project.code },
                   { label: 'Entity', val: project.entity },
-                  { label: 'Start Date', val: fmtDate(project.date) },
+                  { label: 'Start Date', val: fmtDate(project.start_date) },
                   { label: 'Budget', val: project.budget > 0 ? fmt(project.budget) : '—' },
                 ].map(({ label, val }) => (
                   <div key={label} className="flex flex-col">
@@ -1441,7 +1465,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               }
 
               // Auto-match (skip broken, skip already matched, skip employee costs)
-              for (const cost of costs.filter(c => !c.expenseId)) {
+              for (const cost of costs.filter(c => !c.expense_id)) {
                 if (matchedCostIds.has(cost.id)) continue
                 const costAmt = costTotal(cost)
                 for (const inv of payableInvoices) {
@@ -1458,7 +1482,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                 }
               }
 
-              const unmatchedCosts = costs.filter(c => !c.expenseId && !matchedCostIds.has(c.id))
+              const unmatchedCosts = costs.filter(c => !c.expense_id && !matchedCostIds.has(c.id))
               const unmatchedInvoices = payableInvoices.filter(i => !matchedInvIds.has(i.id))
 
               if (matchRows.length === 0 && unmatchedCosts.length === 0 && unmatchedInvoices.length === 0) return null
@@ -1489,10 +1513,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                             <p className="text-xs text-ink truncate">{cost.description}</p>
                             <p className="font-mono text-[10px] text-muted">{fmt(costTotal(cost))}</p>
                           </div>
-                          {cost.receiptUrl && (
-                            <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
+                          {cost.receipt_url && (
+                            <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receipt_url!, name: cost.description }) }}
                               title="View receipt" className="text-muted hover:text-ink transition-colors flex-shrink-0">
-                              {cost.receiptType === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
+                              {cost.receipt_type === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
                             </button>
                           )}
                         </div>
@@ -1528,10 +1552,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           <p className="text-xs text-ink truncate">{cost.description}</p>
                           <p className="font-mono text-[10px] text-muted">{fmt(costTotal(cost))}</p>
                         </div>
-                        {cost.receiptUrl && (
-                          <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receiptUrl!, name: cost.description }) }}
+                        {cost.receipt_url && (
+                          <button onClick={e => { e.stopPropagation(); setLightboxUrl({ url: cost.receipt_url!, name: cost.description }) }}
                             title="View receipt" className="text-muted hover:text-ink transition-colors flex-shrink-0">
-                            {cost.receiptType === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
+                            {cost.receipt_type === 'image' ? <ImageIcon size={11} /> : <FileText size={11} />}
                           </button>
                         )}
                       </div>
@@ -1938,7 +1962,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                               <button
                                 onClick={() => {
                                   // only select those not already expenses
-                                  const eligible = Array.from(costSelectedIds).filter(id => !costs.find(c => c.id === id)?.expenseId)
+                                  const eligible = Array.from(costSelectedIds).filter(id => !costs.find(c => c.id === id)?.expense_id)
                                   if (eligible.length === 0) { toast('All selected are already linked to expenses'); return }
                                   setBulkEmpStep('ask')
                                 }}
@@ -2037,7 +2061,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                 className={cn(
                                   'border-b border-rule last:border-0 group',
                                   snapshot.isDragging ? 'bg-cream shadow-lg'
-                                    : cost.dueDate && cost.status !== 'paid' && cost.dueDate < todayISO() ? 'bg-red-50/60'
+                                    : cost.due_date && cost.status !== 'paid' && cost.due_date < todayISO() ? 'bg-red-50/60'
                                     : index % 2 === 1 ? 'bg-paper/30' : 'bg-white',
                                 )}
                               >
@@ -2071,10 +2095,10 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   <div className="flex-1 min-w-0 px-2">
                                     <div className="flex items-center gap-2 flex-wrap">
                                       <span className="text-sm text-ink truncate">{cost.description}</span>
-                                      {cost.expenseId && (
+                                      {cost.expense_id && (
                                         <span className="badge badge-approved" style={{ fontSize: 9 }}>→ Expense</span>
                                       )}
-                                      {cost.isEmployeeCost && !cost.expenseId && (
+                                      {cost.is_employee_expense && !cost.expense_id && (
                                         <span className="badge badge-draft" style={{ fontSize: 9 }}>Employee</span>
                                       )}
                                       {(() => {
@@ -2110,11 +2134,11 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                         </button>
                                       )}
                                     </div>
-                                    {cost.isEmployeeCost && cost.employeeName && (
-                                      <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employeeName}</p>
+                                    {cost.is_employee_expense && cost.employee_name && (
+                                      <p className="font-mono text-[10px] text-muted mt-0.5">{cost.employee_name}</p>
                                     )}
                                     {/* Per-row name input in bulk mode */}
-                                    {bulkEmpStep === 'per-row' && costSelectedIds.has(cost.id) && !cost.expenseId && (
+                                    {bulkEmpStep === 'per-row' && costSelectedIds.has(cost.id) && !cost.expense_id && (
                                       <div className="mt-1" onClick={e => e.stopPropagation()}>
                                         <EmployeeAutocomplete
                                           value={bulkEmpRows.find(r => r.costId === cost.id)?.name ?? ''}
@@ -2124,11 +2148,11 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                         />
                                       </div>
                                     )}
-                                    {cost.dueDate && cost.status !== 'paid' && (
+                                    {cost.due_date && cost.status !== 'paid' && (
                                       <p className={cn('font-mono text-[10px] mt-0.5 flex items-center gap-1',
-                                        cost.dueDate < todayISO() ? 'text-red-500' : 'text-muted')}>
-                                        {cost.dueDate < todayISO() && <AlertCircle size={9} />}
-                                        Due {fmtDate(cost.dueDate)}
+                                        cost.due_date < todayISO() ? 'text-red-500' : 'text-muted')}>
+                                        {cost.due_date < todayISO() && <AlertCircle size={9} />}
+                                        Due {fmtDate(cost.due_date)}
                                       </p>
                                     )}
                                     {cost.notes && (
@@ -2153,7 +2177,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
                                   {/* Total */}
                                   <div className="w-24 px-2 text-right">
-                                    <span className={cn('font-mono text-xs font-semibold', cost.expenseId ? 'text-muted line-through' : 'text-ink')}>
+                                    <span className={cn('font-mono text-xs font-semibold', cost.expense_id ? 'text-muted line-through' : 'text-ink')}>
                                       {fmt(costTotal(cost))}
                                     </span>
                                   </div>
@@ -2167,13 +2191,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   <div className="w-8 flex-shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
                                     {uploadingReceipt === cost.id ? (
                                       <div className="w-3 h-3 border border-rule border-t-muted animate-spin" />
-                                    ) : cost.receiptUrl ? (
+                                    ) : cost.receipt_url ? (
                                       <button
-                                        onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })}
+                                        onClick={() => setLightboxUrl({ url: cost.receipt_url!, name: cost.description })}
                                         title="View receipt"
                                         className="text-ac-green hover:text-[#2d6147] transition-colors"
                                       >
-                                        {cost.receiptType === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
+                                        {cost.receipt_type === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
                                       </button>
                                     ) : (
                                       <button
@@ -2253,8 +2277,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       </div>
                                       <div>
                                         <label className="field-label">Due Date</label>
-                                        <input type="date" value={cost.dueDate ?? ''}
-                                          onChange={e => updateCost(cost.id, { dueDate: e.target.value || undefined })}
+                                        <input type="date" value={cost.due_date ?? ''}
+                                          onChange={e => updateCost(cost.id, { due_date: e.target.value || undefined })}
                                           className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
                                       </div>
                                     </div>
@@ -2262,15 +2286,15 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                     {/* Receipt */}
                                     <div className="flex items-center gap-3 flex-wrap">
                                       <span className="field-label">Receipt</span>
-                                      {cost.receiptUrl ? (
+                                      {cost.receipt_url ? (
                                         <div className="flex items-center gap-2">
-                                          {cost.receiptType === 'image' ? (
+                                          {cost.receipt_type === 'image' ? (
                                             // eslint-disable-next-line @next/next/no-img-element
-                                            <img src={cost.receiptUrl} alt="receipt"
+                                            <img src={cost.receipt_url} alt="receipt"
                                               className="h-8 w-8 object-cover border border-rule cursor-pointer hover:opacity-80 transition-opacity"
-                                              onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })} />
+                                              onClick={() => setLightboxUrl({ url: cost.receipt_url!, name: cost.description })} />
                                           ) : (
-                                            <button onClick={() => setLightboxUrl({ url: cost.receiptUrl!, name: cost.description })}
+                                            <button onClick={() => setLightboxUrl({ url: cost.receipt_url!, name: cost.description })}
                                               className="flex items-center gap-1 text-muted hover:text-ink text-xs font-mono">
                                               <FileText size={12} /> PDF
                                             </button>
@@ -2297,30 +2321,30 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       <span className="field-label">Employee Cost</span>
                                       <button
                                         onClick={() => updateCost(cost.id, {
-                                          isEmployeeCost: !cost.isEmployeeCost,
-                                          employeeName: !cost.isEmployeeCost ? (cost.employeeName ?? '') : '',
+                                          is_employee_expense: !cost.is_employee_expense,
+                                          employee_name: !cost.is_employee_expense ? (cost.employee_name ?? '') : '',
                                         })}
                                         className={cn(
                                           'flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider border transition-colors',
-                                          cost.isEmployeeCost
+                                          cost.is_employee_expense
                                             ? 'bg-ink text-white border-ink'
                                             : 'border-rule text-muted hover:text-ink hover:border-ink'
                                         )}
                                       >
-                                        <User size={10} /> {cost.isEmployeeCost ? 'On' : 'Off'}
+                                        <User size={10} /> {cost.is_employee_expense ? 'On' : 'Off'}
                                       </button>
-                                      {cost.isEmployeeCost && (
+                                      {cost.is_employee_expense && (
                                         <>
                                           <EmployeeAutocomplete
-                                            value={cost.employeeName ?? ''}
-                                            onChange={name => updateCost(cost.id, { employeeName: name })}
+                                            value={cost.employee_name ?? ''}
+                                            onChange={name => updateCost(cost.id, { employee_name: name })}
                                             allEmployeeNames={allEmployeeNames}
                                             profiles={employeeProfiles}
                                           />
-                                          {!cost.expenseId ? (
+                                          {!cost.expense_id ? (
                                             <button
                                               onClick={() => handleCreateExpense(cost.id)}
-                                              disabled={!cost.employeeName?.trim() || creatingExpense === cost.id}
+                                              disabled={!cost.employee_name?.trim() || creatingExpense === cost.id}
                                               className="flex items-center gap-1.5 px-2 py-1 text-xs font-mono uppercase tracking-wider bg-ac-green text-white hover:opacity-90 transition-opacity disabled:opacity-50"
                                             >
                                               <CheckCircle size={10} />
@@ -2340,7 +2364,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                       const form = getCostForm(cost.id, cost)
                                       const existingLink = reconLinks.manual.find(m => m.costId === cost.id)
                                       const linkedInv = existingLink ? projInvoices.find(i => i.id === existingLink.invoiceId) : null
-                                      const hasPdf = cost.receiptUrl && cost.receiptType === 'pdf'
+                                      const hasPdf = cost.receipt_url && cost.receipt_type === 'pdf'
                                       function conf(field: string) {
                                         const c = form.confidence[field] ?? 0
                                         if (c === 0) return null
@@ -2385,18 +2409,18 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                           {/* Invoice form */}
                                           {form.open && !linkedInv && (
                                             <div className="bg-white border border-rule overflow-hidden">
-                                              <div className={cost.receiptUrl ? 'flex flex-col sm:flex-row' : ''}>
+                                              <div className={cost.receipt_url ? 'flex flex-col sm:flex-row' : ''}>
                                                 {/* Left: receipt viewer (side-by-side on sm+) */}
-                                                {cost.receiptUrl && (
+                                                {cost.receipt_url && (
                                                   <div className="sm:w-[45%] border-b sm:border-b-0 sm:border-r border-rule bg-cream flex items-center justify-center" style={{ minHeight: 380 }}>
-                                                    {cost.receiptType === 'image'
-                                                      ? <img src={cost.receiptUrl} alt="Receipt" className="w-full h-full object-contain" style={{ maxHeight: 480 }} />
-                                                      : <iframe src={cost.receiptUrl} className="w-full border-0 bg-white" style={{ height: 480, minHeight: 380 }} title="Invoice PDF" />
+                                                    {cost.receipt_type === 'image'
+                                                      ? <img src={cost.receipt_url} alt="Receipt" className="w-full h-full object-contain" style={{ maxHeight: 480 }} />
+                                                      : <iframe src={cost.receipt_url} className="w-full border-0 bg-white" style={{ height: 480, minHeight: 380 }} title="Invoice PDF" />
                                                     }
                                                   </div>
                                                 )}
                                                 {/* Right (or full width): form fields */}
-                                                <div className={`p-3 space-y-3${cost.receiptUrl ? ' sm:flex-1' : ''}`}>
+                                                <div className={`p-3 space-y-3${cost.receipt_url ? ' sm:flex-1' : ''}`}>
                                               {/* Row 1: core fields */}
                                               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
                                                 <div className="col-span-2">
@@ -2559,8 +2583,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                               </div>
                               <div>
                                 <label className="field-label">Due Date</label>
-                                <input type="date" value={newCost.dueDate ?? ''}
-                                  onChange={e => setNewCost(c => ({ ...c, dueDate: e.target.value || undefined }))}
+                                <input type="date" value={newCost.due_date ?? ''}
+                                  onChange={e => setNewCost(c => ({ ...c, due_date: e.target.value || undefined }))}
                                   className="w-full border border-rule bg-white px-2 py-1 text-xs font-mono text-ink focus:outline-none" />
                               </div>
                             </div>
@@ -2585,8 +2609,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   <div className="px-4 py-3 flex items-center justify-between flex-wrap gap-2">
                     <span className="font-mono text-xs text-muted">
                       {costs.length} line{costs.length !== 1 ? 's' : ''}
-                      {costs.some(c => c.expenseId) && (
-                        <span className="ml-1 opacity-60">· {costs.filter(c => c.expenseId).length} linked to expenses</span>
+                      {costs.some(c => c.expense_id) && (
+                        <span className="ml-1 opacity-60">· {costs.filter(c => c.expense_id).length} linked to expenses</span>
                       )}
                     </span>
                     <div className="flex items-center gap-3 flex-wrap">
@@ -2848,7 +2872,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                           </button>
                         )}
                         {!fileBulkDone.has(f.id) && !fileBulkFailed.has(f.id) && (
-                          <p className="font-mono text-[9px] text-muted/60">{fmtDate(f.uploadedAt)}</p>
+                          <p className="font-mono text-[9px] text-muted/60">{fmtDate(f.uploaded_at)}</p>
                         )}
                       </div>
                     </div>
@@ -2917,7 +2941,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                         </button>
                       </div>
                       <p className="font-mono text-[10px] text-muted mt-2">
-                        {new Date(note.createdAt).toLocaleString('en-GB', {
+                        {new Date(note.created_at).toLocaleString('en-GB', {
                           day: '2-digit', month: 'short', year: 'numeric',
                           hour: '2-digit', minute: '2-digit',
                         })}
@@ -3044,7 +3068,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         // Group costs by category
         const costsByCategory = new Map<string, typeof costs>()
         for (const cat of COST_CATEGORIES) {
-          const cats = costs.filter(c => !c.expenseId && c.category === cat)
+          const cats = costs.filter(c => !c.expense_id && c.category === cat)
           if (cats.length > 0) costsByCategory.set(cat, cats)
         }
 
@@ -3163,7 +3187,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                               {items.map(c => (
                                 <tr key={c.id} style={{ borderBottom: '1px solid #e2e2e0' }}>
                                   <td style={{ padding: '5px 8px 5px 12px', color: '#4a4a4a' }}>
-                                    {c.description}{c.employeeName ? ` (${c.employeeName})` : ''}
+                                    {c.description}{c.employee_name ? ` (${c.employee_name})` : ''}
                                   </td>
                                   <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace', color: '#6a6a6a' }}>{c.qty ?? 1}</td>
                                   <td style={{ textAlign: 'right', padding: '5px 0 5px 8px', fontFamily: 'monospace', color: '#6a6a6a' }}>{fmt(c.estimated)}</td>

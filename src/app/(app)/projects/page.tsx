@@ -25,8 +25,8 @@ const STATUS_STYLES: Record<ProjectStatus, string> = {
   'on-hold': 'badge-pending',
 }
 
-const blank = (): Omit<Project, 'createdAt'> => ({
-  code: '', name: '', entity: 'Actually Creative', date: todayISO(),
+const blank = (): Omit<Project, 'id' | 'created_at'> => ({
+  code: '', name: '', entity: 'Actually Creative', start_date: todayISO(),
   budget: 0, status: 'active', notes: '',
 })
 
@@ -47,6 +47,14 @@ export default function ProjectsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [codeChangeWarn, setCodeChangeWarn] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [allCosts, setAllCosts] = useState<Array<{ project_code: string; qty?: number; estimated: number; actual: number; expense_id?: string }>>([])
+
+  // Load costs aggregates for grid view stats
+  useEffect(() => {
+    sb.from('project_costs').select('project_code,qty,estimated,actual,expense_id').then(({ data }) => {
+      if (data) setAllCosts(data as typeof allCosts)
+    })
+  }, [])
 
   // Handle ?open=CODE param from other pages
   useEffect(() => {
@@ -72,7 +80,7 @@ export default function ProjectsPage() {
   function openCreate() { setEditing(null); setForm(blank()); setError(''); setCodeChangeWarn(false); setModalOpen(true) }
   function openEdit(p: Project) {
     setEditing(p)
-    setForm({ code: p.code, name: p.name, entity: p.entity, date: p.date, budget: p.budget, status: p.status, notes: p.notes })
+    setForm({ code: p.code, name: p.name, entity: p.entity, start_date: p.start_date, budget: p.budget, status: p.status, notes: p.notes })
     setError('')
     setCodeChangeWarn(false)
     setModalOpen(true)
@@ -86,44 +94,56 @@ export default function ProjectsPage() {
     if (!form.code.trim()) { setError('Project code is required'); return }
     if (!form.name.trim()) { setError('Project name is required'); return }
 
-    if (editing) {
-      const codeChanged = form.code !== editing.code
-      if (codeChanged && projects.find(p => p.code === form.code && p.code !== editing.code)) {
-        setError('Project code already exists'); return
-      }
-      if (codeChanged && !codeChangeWarn) {
-        setError(`Changing code from "${editing.code}" to "${form.code}" will update all linked invoices and expenses. Click Save again to confirm.`)
-        setCodeChangeWarn(true)
-        return
-      }
-      if (codeChanged) {
-        const { code: _c, ...rest } = form
-        const renamed = renameProjectCode(editing.code, form.code, rest)
-        await Promise.all([
-          sb.from('invoices').update({ project_code: form.code }).eq('project_code', editing.code),
-          sb.from('expenses').update({ project_code: form.code }).eq('project_code', editing.code),
-        ])
-        if (selectedProject?.code === editing.code && renamed) setSelectedProject(renamed)
+    try {
+      if (editing) {
+        const codeChanged = form.code !== editing.code
+        if (codeChanged && projects.find(p => p.code === form.code && p.code !== editing.code)) {
+          setError('Project code already exists'); return
+        }
+        if (codeChanged && !codeChangeWarn) {
+          setError(`Changing code from "${editing.code}" to "${form.code}" will update all linked invoices and expenses. Click Save again to confirm.`)
+          setCodeChangeWarn(true)
+          return
+        }
+        if (codeChanged) {
+          const { code: _c, ...rest } = form
+          const renamed = await renameProjectCode(editing.code, form.code, rest)
+          await Promise.all([
+            sb.from('invoices').update({ project_code: form.code }).eq('project_code', editing.code),
+            sb.from('expenses').update({ project_code: form.code }).eq('project_code', editing.code),
+          ])
+          if (selectedProject?.code === editing.code && renamed) setSelectedProject(renamed)
+        } else {
+          await updateProject(editing.code, form)
+        }
       } else {
-        updateProject(editing.code, form)
+        if (projects.find(p => p.code === form.code)) { setError('Project code already exists'); return }
+        await createProject(form)
       }
-    } else {
-      if (projects.find(p => p.code === form.code)) { setError('Project code already exists'); return }
-      createProject(form)
+      setError('')
+      setCodeChangeWarn(false)
+      setModalOpen(false)
+      toast(editing ? 'Project updated' : 'Project created')
+    } catch (e) {
+      setError(`Save failed: ${String(e)}`)
     }
-    setError('')
-    setCodeChangeWarn(false)
-    setModalOpen(false)
-    toast(editing ? 'Project updated' : 'Project created')
   }
 
-  function deleteProjectAndCleanup(code: string) {
-    localStorage.removeItem(`project_notes_${code}`)
-    localStorage.removeItem(`project_files_${code}`)
-    localStorage.removeItem(`project_costs_${code}`)
-    deleteProject(code)
-    setSelectedProject(null)
-    toast('Project deleted', 'error')
+  async function deleteProjectAndCleanup(code: string) {
+    try {
+      // Delete all child records from Supabase first
+      await Promise.all([
+        sb.from('project_costs').delete().eq('project_code', code),
+        sb.from('project_notes').delete().eq('project_code', code),
+        sb.from('project_files').delete().eq('project_code', code),
+        sb.from('project_whiteboards').delete().eq('project_code', code),
+      ])
+      await deleteProject(code)
+      setSelectedProject(null)
+      toast('Project deleted', 'error')
+    } catch (e) {
+      toast(`Delete failed: ${String(e)}`, 'error')
+    }
   }
 
   function handleDelete(code: string) {
@@ -144,15 +164,10 @@ export default function ProjectsPage() {
   }, [projects, entityFilter, statusFilter])
 
   function projectStats(code: string) {
-    // Direct costs from localStorage (excluding those promoted to expenses)
-    let directCosts = 0
-    try {
-      const raw = localStorage.getItem(`project_costs_${code}`)
-      if (raw) {
-        const costs = JSON.parse(raw) as Array<{ qty?: number; estimated: number; actual: number; expenseId?: string }>
-        directCosts = costs.filter(c => !c.expenseId).reduce((t, c) => t + (c.qty ?? 1) * c.estimated, 0)
-      }
-    } catch { /* ignore */ }
+    // Direct costs from Supabase (excluding those promoted to expenses)
+    const directCosts = allCosts
+      .filter(c => c.project_code === code && !c.expense_id)
+      .reduce((t, c) => t + (c.qty ?? 1) * c.estimated, 0)
     const expenseTotal = expenses.filter(e => e.project_code === code).reduce((t, e) => t + Number(e.total), 0)
     const outstanding = expenses.filter(e => e.project_code === code && e.status !== 'paid').length
     const totalSpend = directCosts + expenseTotal
@@ -260,7 +275,7 @@ export default function ProjectsPage() {
                         </div>
                         <p className="text-sm font-semibold text-ink truncate">{project.name}</p>
                         <p className="font-mono text-[10px] text-muted mt-0.5 uppercase tracking-wider">
-                          {project.entity === 'Actually Creative' ? 'AC' : project.entity} · {fmtDate(project.date)}
+                          {project.entity === 'Actually Creative' ? 'AC' : project.entity} · {fmtDate(project.start_date)}
                         </p>
                       </div>
                       <div className="row-actions flex-shrink-0" onClick={e => e.stopPropagation()}>
@@ -342,8 +357,8 @@ function ProjectFormBody({
   set,
   editing,
 }: {
-  form: Omit<Project, 'createdAt'>
-  set: <K extends keyof Omit<Project, 'createdAt'>>(key: K, val: Omit<Project, 'createdAt'>[K]) => void
+  form: Omit<Project, 'id' | 'created_at'>
+  set: <K extends keyof Omit<Project, 'id' | 'created_at'>>(key: K, val: Omit<Project, 'id' | 'created_at'>[K]) => void
   editing: Project | null
 }) {
   return (
@@ -376,7 +391,7 @@ function ProjectFormBody({
         </div>
         <div>
           <label className="field-label">Start Date</label>
-          <input type="date" value={form.date} onChange={e => set('date', e.target.value)}
+          <input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)}
             className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
         </div>
         <div className="col-span-2">

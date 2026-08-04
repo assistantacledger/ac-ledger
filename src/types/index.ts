@@ -112,14 +112,15 @@ export type ExpenseUpdate = Partial<ExpenseInsert>
 export type ProjectStatus = 'active' | 'completed' | 'on-hold'
 
 export interface Project {
+  id?: string          // UUID from Supabase (optional for backwards compat)
   code: string
   name: string
   entity: Entity
-  date: string
+  start_date: string   // was 'date'
   budget: number
   status: ProjectStatus
   notes: string
-  createdAt: string
+  created_at: string   // was 'createdAt'
 }
 
 // ─── Company Settings ────────────────────────────────────────────────────────
@@ -194,17 +195,19 @@ export interface InvoiceTemplate {
 
 export interface ProjectNote {
   id: string
+  project_code?: string
   text: string
-  createdAt: string
+  created_at: string   // was 'createdAt'
 }
 
 export interface ProjectFile {
   id: string
+  project_code?: string
   name: string
   url: string
   type: 'image' | 'pdf'
-  uploadedAt: string
-  path: string  // storage path for deletion
+  uploaded_at: string  // was 'uploadedAt'
+  path: string         // storage path for deletion
 }
 
 export type CostCategory = 'Equipment' | 'Travel' | 'Crew' | 'Talent' | 'Venue' | 'Software' | 'Marketing' | 'Other'
@@ -212,20 +215,24 @@ export type CostStatus = 'planned' | 'confirmed' | 'paid'
 
 export interface ProjectCost {
   id: string
+  project_code?: string
   description: string
   category: CostCategory
-  qty?: number        // quantity (default 1); total = qty × estimated (unit price)
-  estimated: number  // unit price per item
-  actual: number     // total cost = qty × unit price (auto-set)
+  qty?: number           // quantity (default 1); total = qty × estimated (unit price)
+  estimated: number      // unit price per item
+  actual: number         // total cost = qty × unit price (auto-set)
+  unit_price?: number
   status: CostStatus
   notes: string
-  dueDate?: string   // ISO date string — highlights in red if overdue and not paid
-  receiptUrl?: string
-  receiptPath?: string
-  receiptType?: 'image' | 'pdf'
-  isEmployeeCost?: boolean
-  employeeName?: string
-  expenseId?: string  // Supabase expense ID once created
+  due_date?: string      // was 'dueDate'
+  receipt_url?: string   // was 'receiptUrl'
+  receipt_path?: string  // was 'receiptPath'
+  receipt_type?: 'image' | 'pdf'  // was 'receiptType'
+  is_employee_expense?: boolean   // was 'isEmployeeCost'
+  employee_name?: string          // was 'employeeName'
+  expense_id?: string             // was 'expenseId' — Supabase expense ID once created
+  invoice_id?: string
+  sort_order?: number
 }
 
 // ─── Employee Profiles ───────────────────────────────────────────────────────

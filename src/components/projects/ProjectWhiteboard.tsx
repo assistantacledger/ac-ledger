@@ -88,25 +88,26 @@ function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
 
-function loadState(code: string): WhiteboardState {
-  try {
-    const raw = localStorage.getItem(`project_whiteboard_${code}`)
-    if (raw) return JSON.parse(raw) as WhiteboardState
-  } catch { /* ignore */ }
+async function loadStateFromSupabase(code: string): Promise<WhiteboardState> {
+  const { data } = await sb.from('project_whiteboards').select('elements').eq('project_code', code).single()
+  if (data && Array.isArray((data as { elements: unknown }).elements)) {
+    return { elements: (data as { elements: WbElement[] }).elements }
+  }
   return { elements: [] }
 }
 
-function saveState(code: string, state: WhiteboardState) {
-  try {
-    localStorage.setItem(`project_whiteboard_${code}`, JSON.stringify(state))
-  } catch { /* ignore */ }
+async function saveStateToSupabase(code: string, state: WhiteboardState) {
+  await sb.from('project_whiteboards').upsert(
+    { project_code: code, elements: state.elements, updated_at: new Date().toISOString() },
+    { onConflict: 'project_code' }
+  )
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ProjectWhiteboard({ projectCode }: Props) {
   // Canvas state
-  const [state, setState] = useState<WhiteboardState>(() => loadState(projectCode))
+  const [state, setState] = useState<WhiteboardState>({ elements: [] })
   const [panX, setPanX] = useState(0)
   const [panY, setPanY] = useState(0)
   const [zoom, setZoom] = useState(1)
@@ -146,32 +147,30 @@ export function ProjectWhiteboard({ projectCode }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
+  // Load state from Supabase when projectCode changes
+  useEffect(() => {
+    setSaved(true)
+    setPanX(0); setPanY(0); setZoom(1)
+    loadStateFromSupabase(projectCode).then(s => setState(s)).catch(() => {})
+  }, [projectCode])
+
   // Auto-save: debounced 2s
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   function markUnsaved(newState: WhiteboardState) {
     setSaved(false)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      saveState(projectCode, newState)
-      setSaved(true)
+      saveStateToSupabase(projectCode, newState).then(() => setSaved(true)).catch(() => {})
     }, 2000)
   }
 
   // Periodic save every 30s
   useEffect(() => {
     const interval = setInterval(() => {
-      saveState(projectCode, state)
-      setSaved(true)
+      saveStateToSupabase(projectCode, state).then(() => setSaved(true)).catch(() => {})
     }, 30000)
     return () => clearInterval(interval)
   }, [projectCode, state])
-
-  // Reload when projectCode changes
-  useEffect(() => {
-    setState(loadState(projectCode))
-    setSaved(true)
-    setPanX(0); setPanY(0); setZoom(1)
-  }, [projectCode])
 
   // ── Coordinate helpers ──
 
@@ -464,10 +463,9 @@ export function ProjectWhiteboard({ projectCode }: Props) {
   // ── Clear ──
 
   function clearBoard() {
-    const next = { elements: [] }
+    const next: WhiteboardState = { elements: [] }
     setState(next)
-    saveState(projectCode, next)
-    setSaved(true)
+    saveStateToSupabase(projectCode, next).then(() => setSaved(true)).catch(() => {})
     setClearConfirm(false)
     toast('Whiteboard cleared')
   }

@@ -5,6 +5,7 @@ import {
   Upload, FileText, X, CheckCircle, Plus, Trash2, AlertCircle, FolderOpen,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
+import { sb } from '@/lib/supabase'
 import { cn, todayISO } from '@/lib/format'
 import { ENTITIES } from '@/types'
 import type {
@@ -98,7 +99,7 @@ interface Props {
   isOpen: boolean
   onClose: () => void
   projects: Project[]
-  createProject: (data: Omit<Project, 'createdAt'>) => Project
+  createProject: (data: Omit<Project, 'id' | 'created_at'>) => Promise<Project>
   createInvoice?: (data: InvoiceInsert) => Promise<Invoice>
   anthropicKey?: string
   /** Pre-select an existing project and default to "add to existing" mode */
@@ -367,9 +368,9 @@ export function ProjectImport({
 
     try {
       if (mode === 'new') {
-        createProject({
+        await createProject({
           code: proj.code, name: proj.name, entity: proj.entity,
-          date: proj.date, budget: proj.budget, status: proj.status, notes: proj.notes,
+          start_date: proj.date, budget: proj.budget, status: proj.status, notes: proj.notes,
         })
         projectCode = proj.code
         projectName = proj.name
@@ -381,25 +382,29 @@ export function ProjectImport({
         projectEntity = existing?.entity ?? 'Actually Creative'
       }
 
-      // Save costs to localStorage (append to any existing)
+      // Save costs to Supabase (append to any existing)
       if (costs.length > 0) {
-        let existing: unknown[] = []
-        try { const r = localStorage.getItem(`project_costs_${projectCode}`); if (r) existing = JSON.parse(r) } catch { /* ignore */ }
+        const { data: existingCosts } = await sb.from('project_costs').select('sort_order').eq('project_code', projectCode).order('sort_order', { ascending: false }).limit(1)
+        const startOrder = existingCosts && existingCosts.length > 0 ? ((existingCosts[0] as { sort_order: number }).sort_order + 1) : 0
         const newCosts = costs
           .filter(c => c.description.trim())
-          .map(c => ({
+          .map((c, i) => ({
             id: crypto.randomUUID(),
+            project_code: projectCode,
             description: c.description,
             category: c.category,
             estimated: c.estimated,
             actual: c.actual,
             status: c.status,
             notes: c.notes,
-            dueDate: c.dueDate || undefined,
-            employeeName: c.employeeName || undefined,
-            isEmployeeCost: !!c.employeeName,
+            due_date: c.dueDate || null,
+            employee_name: c.employeeName || null,
+            is_employee_expense: !!c.employeeName,
+            sort_order: startOrder + i,
           }))
-        localStorage.setItem(`project_costs_${projectCode}`, JSON.stringify([...existing, ...newCosts]))
+        if (newCosts.length > 0) {
+          await sb.from('project_costs').insert(newCosts)
+        }
       }
 
       // Save invoices to Supabase

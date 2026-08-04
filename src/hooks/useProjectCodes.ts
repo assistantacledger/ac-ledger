@@ -3,42 +3,25 @@
 import { useMemo } from 'react'
 import type { Invoice, Expense, Project } from '@/types'
 
-// Loads projects from all known localStorage keys (supports both app versions)
-function loadLocalProjects(): Project[] {
-  const out: Project[] = []
-  for (const key of ['ledger_projects', 'ledger_projects_v2']) {
-    try {
-      const raw = localStorage.getItem(key)
-      if (raw) {
-        const arr = JSON.parse(raw) as Project[]
-        arr.forEach(p => {
-          if (!out.find(x => x.code === p.code)) out.push(p)
-        })
-      }
-    } catch { /* ignore */ }
-  }
-  return out
-}
-
 /**
  * Returns a sorted, deduplicated list of project {code, name} pairs
- * combining localStorage projects with unique project_codes from Supabase records.
+ * combining the projects array (from Supabase via useProjects) with
+ * unique project_codes found in Supabase invoices and expenses.
  */
 export function useProjectCodes(
   invoices: Invoice[],
   expenses?: Expense[],
+  projects?: Project[],
 ): { code: string; name: string }[] {
   return useMemo(() => {
     const map = new Map<string, string>()
 
-    // From localStorage
-    if (typeof window !== 'undefined') {
-      loadLocalProjects().forEach(p => {
-        if (p.code) map.set(p.code, p.name || p.code)
-      })
-    }
+    // From Supabase projects (passed in from useProjects hook)
+    projects?.forEach(p => {
+      if (p.code) map.set(p.code, p.name || p.code)
+    })
 
-    // From Supabase invoices
+    // From Supabase invoices (for any project codes not in projects table)
     invoices.forEach(i => {
       if (i.project_code && !map.has(i.project_code)) {
         map.set(i.project_code, i.project_name || i.project_code)
@@ -55,5 +38,5 @@ export function useProjectCodes(
     return Array.from(map.entries())
       .map(([code, name]) => ({ code, name }))
       .sort((a, b) => a.code.localeCompare(b.code))
-  }, [invoices, expenses])
+  }, [invoices, expenses, projects])
 }
