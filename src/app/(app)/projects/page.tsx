@@ -12,12 +12,31 @@ import { useAuth } from '@/contexts/AuthContext'
 import { sb } from '@/lib/supabase'
 import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
 import { Plus, Pencil, Trash2, FolderOpen, Upload } from 'lucide-react'
-import type { Project, Entity, ProjectStatus } from '@/types'
+import type { Project, Entity, ProjectStatus, ProjectType } from '@/types'
 import { ENTITIES } from '@/types'
 import { toast } from '@/lib/toast'
 import { ProjectImport } from '@/components/projects/ProjectImport'
 
 const STATUSES: ProjectStatus[] = ['active', 'completed', 'on-hold']
+
+const PROJECT_TYPES: { value: ProjectType; label: string }[] = [
+  { value: 'production', label: 'Production / Shoot' },
+  { value: 'campaign', label: 'Campaign' },
+  { value: 'event', label: 'Event' },
+  { value: 'retainer', label: 'Retainer' },
+  { value: 'other', label: 'Other' },
+]
+
+function getProjectTypes(): Record<string, ProjectType> {
+  try { return JSON.parse(localStorage.getItem('ledger_project_types') || '{}') } catch { return {} }
+}
+function saveProjectType(code: string, type: ProjectType) {
+  try {
+    const types = getProjectTypes()
+    types[code] = type
+    localStorage.setItem('ledger_project_types', JSON.stringify(types))
+  } catch { /* ignore */ }
+}
 
 const STATUS_STYLES: Record<ProjectStatus, string> = {
   active: 'badge-approved',
@@ -41,6 +60,7 @@ export default function ProjectsPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
   const [form, setForm] = useState(blank())
+  const [formProjectType, setFormProjectType] = useState<ProjectType>('other')
   const [error, setError] = useState('')
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all')
   const [entityFilter, setEntityFilter] = useState<Entity | 'all'>('all')
@@ -77,10 +97,11 @@ export default function ProjectsPage() {
     }
   }, [projects]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function openCreate() { setEditing(null); setForm(blank()); setError(''); setCodeChangeWarn(false); setModalOpen(true) }
+  function openCreate() { setEditing(null); setForm(blank()); setFormProjectType('other'); setError(''); setCodeChangeWarn(false); setModalOpen(true) }
   function openEdit(p: Project) {
     setEditing(p)
     setForm({ code: p.code, name: p.name, entity: p.entity, start_date: p.start_date, budget: p.budget, status: p.status, notes: p.notes })
+    setFormProjectType(getProjectTypes()[p.code] || 'other')
     setError('')
     setCodeChangeWarn(false)
     setModalOpen(true)
@@ -123,6 +144,7 @@ export default function ProjectsPage() {
       setError('')
       setCodeChangeWarn(false)
       setModalOpen(false)
+      saveProjectType(form.code, formProjectType)
       toast(editing ? 'Project updated' : 'Project created')
     } catch (e) {
       setError(`Save failed: ${String(e)}`)
@@ -207,7 +229,7 @@ export default function ProjectsPage() {
           createProject={createProject}
         />
         <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`Edit · ${editing?.code}`} size="lg" footer={footer}>
-          <ProjectFormBody form={form} set={set} editing={editing} />
+          <ProjectFormBody form={form} set={set} editing={editing} projectType={formProjectType} onProjectTypeChange={setFormProjectType} />
         </Modal>
       </>
     )
@@ -329,7 +351,7 @@ export default function ProjectsPage() {
       </main>
 
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Edit · ${editing.code}` : 'New Project'} size="lg" footer={footer}>
-        <ProjectFormBody form={form} set={set} editing={editing} />
+        <ProjectFormBody form={form} set={set} editing={editing} projectType={formProjectType} onProjectTypeChange={setFormProjectType} />
       </Modal>
 
       <ProjectImport
@@ -356,10 +378,14 @@ function ProjectFormBody({
   form,
   set,
   editing,
+  projectType,
+  onProjectTypeChange,
 }: {
   form: Omit<Project, 'id' | 'created_at'>
   set: <K extends keyof Omit<Project, 'id' | 'created_at'>>(key: K, val: Omit<Project, 'id' | 'created_at'>[K]) => void
   editing: Project | null
+  projectType: ProjectType
+  onProjectTypeChange: (t: ProjectType) => void
 }) {
   return (
     <div className="px-5 py-5 space-y-4">
@@ -383,6 +409,13 @@ function ProjectFormBody({
             className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
         </div>
         <div>
+          <label className="field-label">Project Type</label>
+          <select value={projectType} onChange={e => onProjectTypeChange(e.target.value as ProjectType)}
+            className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none font-mono">
+            {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="field-label">Entity</label>
           <select value={form.entity} onChange={e => set('entity', e.target.value as Entity)}
             className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none">
@@ -394,7 +427,7 @@ function ProjectFormBody({
           <input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)}
             className="w-full border border-rule bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink" />
         </div>
-        <div className="col-span-2">
+        <div>
           <label className="field-label">Budget</label>
           <input type="number" value={form.budget} onChange={e => set('budget', parseFloat(e.target.value) || 0)}
             min="0" step="100"

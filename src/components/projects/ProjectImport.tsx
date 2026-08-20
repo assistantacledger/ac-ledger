@@ -15,7 +15,13 @@ import type {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const COST_CATS: CostCategory[] = ['Equipment', 'Travel', 'Crew', 'Talent', 'Venue', 'Software', 'Marketing', 'Other']
+const COST_CATS: CostCategory[] = [
+  'Crew', 'Cast / Talent', 'Locations / Permits', 'Equipment Hire',
+  'Catering / Craft Services', 'Travel & Transport', 'Accommodation',
+  'Post Production', 'Music / Licensing', 'Wardrobe / Styling',
+  'Hair & Makeup', 'Art Direction / Props', 'Marketing / Deliverables',
+  'Contingency', 'Other',
+]
 const COST_STATS: CostStatus[] = ['planned', 'confirmed', 'paid']
 const INV_STATS: InvoiceStatus[] = ['draft', 'pending', 'submitted', 'approved', 'sent', 'paid', 'overdue', 'part-paid']
 const PROJ_STATS: ProjectStatus[] = ['active', 'completed', 'on-hold']

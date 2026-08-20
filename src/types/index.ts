@@ -210,7 +210,24 @@ export interface ProjectFile {
   path: string         // storage path for deletion
 }
 
-export type CostCategory = 'Equipment' | 'Travel' | 'Crew' | 'Talent' | 'Venue' | 'Software' | 'Marketing' | 'Other'
+export type ProjectType = 'production' | 'campaign' | 'event' | 'retainer' | 'other'
+
+export type CostCategory =
+  | 'Crew'
+  | 'Cast / Talent'
+  | 'Locations / Permits'
+  | 'Equipment Hire'
+  | 'Catering / Craft Services'
+  | 'Travel & Transport'
+  | 'Accommodation'
+  | 'Post Production'
+  | 'Music / Licensing'
+  | 'Wardrobe / Styling'
+  | 'Hair & Makeup'
+  | 'Art Direction / Props'
+  | 'Marketing / Deliverables'
+  | 'Contingency'
+  | 'Other'
 export type CostStatus = 'planned' | 'confirmed' | 'paid'
 
 export interface ProjectCost {

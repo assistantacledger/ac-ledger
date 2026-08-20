@@ -24,7 +24,7 @@ import { ExpenseModal } from '@/components/expenses/ExpenseModal'
 import { ExpenseReimbursePDF } from '@/components/expenses/ExpenseReimbursePDF'
 import type {
   Project, Invoice, Expense, ExpenseInsert, ExpenseUpdate, InvoiceInsert, InvoiceUpdate,
-  ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus, EmployeeProfile,
+  ProjectNote, ProjectFile, ProjectCost, CostCategory, CostStatus, EmployeeProfile, ProjectType,
 } from '@/types'
 
 // ─── Employee Autocomplete ────────────────────────────────────────────────────
@@ -93,7 +93,113 @@ function EmployeeAutocomplete({ value, onChange, allEmployeeNames, profiles }: {
 
 type Tab = 'overview' | 'invoices' | 'expenses' | 'costs' | 'payment-sheet' | 'files-notes' | 'whiteboard'
 
-const COST_CATEGORIES: CostCategory[] = ['Equipment', 'Travel', 'Crew', 'Talent', 'Venue', 'Software', 'Marketing', 'Other']
+const COST_CATEGORIES: CostCategory[] = [
+  'Crew', 'Cast / Talent', 'Locations / Permits', 'Equipment Hire',
+  'Catering / Craft Services', 'Travel & Transport', 'Accommodation',
+  'Post Production', 'Music / Licensing', 'Wardrobe / Styling',
+  'Hair & Makeup', 'Art Direction / Props', 'Marketing / Deliverables',
+  'Contingency', 'Other',
+]
+
+// ─── Budget templates ─────────────────────────────────────────────────────────
+
+interface BudgetTemplateItem { description: string; category: CostCategory }
+
+const BUDGET_TEMPLATES: Record<string, { label: string; items: BudgetTemplateItem[] }> = {
+  small_shoot: {
+    label: 'Small Shoot',
+    items: [
+      { description: 'Director fee', category: 'Crew' },
+      { description: 'DOP fee', category: 'Crew' },
+      { description: 'Camera Operator', category: 'Crew' },
+      { description: '1st AC', category: 'Crew' },
+      { description: 'Gaffer', category: 'Crew' },
+      { description: 'Art Director', category: 'Art Direction / Props' },
+      { description: 'Stylist', category: 'Wardrobe / Styling' },
+      { description: 'Hair & Makeup', category: 'Hair & Makeup' },
+      { description: 'Location fee', category: 'Locations / Permits' },
+      { description: 'Equipment hire', category: 'Equipment Hire' },
+      { description: 'Transport', category: 'Travel & Transport' },
+      { description: 'Catering', category: 'Catering / Craft Services' },
+      { description: 'Edit', category: 'Post Production' },
+      { description: 'Grade', category: 'Post Production' },
+      { description: 'Sound mix', category: 'Post Production' },
+    ],
+  },
+  large_production: {
+    label: 'Large Production',
+    items: [
+      { description: 'Director fee', category: 'Crew' },
+      { description: 'Executive Producer', category: 'Crew' },
+      { description: 'Line Producer', category: 'Crew' },
+      { description: 'DOP fee', category: 'Crew' },
+      { description: 'Camera Operator A', category: 'Crew' },
+      { description: 'Camera Operator B', category: 'Crew' },
+      { description: '1st AC', category: 'Crew' },
+      { description: '2nd AC', category: 'Crew' },
+      { description: 'Gaffer', category: 'Crew' },
+      { description: 'Best Boy Electric', category: 'Crew' },
+      { description: 'Key Grip', category: 'Crew' },
+      { description: 'Grip', category: 'Crew' },
+      { description: 'Sound Recordist', category: 'Crew' },
+      { description: 'Boom Operator', category: 'Crew' },
+      { description: 'Production Designer', category: 'Art Direction / Props' },
+      { description: 'Art Director', category: 'Art Direction / Props' },
+      { description: 'Props', category: 'Art Direction / Props' },
+      { description: 'Wardrobe Stylist', category: 'Wardrobe / Styling' },
+      { description: 'Hair Stylist', category: 'Hair & Makeup' },
+      { description: 'Makeup Artist', category: 'Hair & Makeup' },
+      { description: 'Lead Actor', category: 'Cast / Talent' },
+      { description: 'Supporting Cast', category: 'Cast / Talent' },
+      { description: 'Extras', category: 'Cast / Talent' },
+      { description: 'Location fee — Day 1', category: 'Locations / Permits' },
+      { description: 'Location fee — Day 2', category: 'Locations / Permits' },
+      { description: 'Location permits', category: 'Locations / Permits' },
+      { description: 'Camera package', category: 'Equipment Hire' },
+      { description: 'Lighting package', category: 'Equipment Hire' },
+      { description: 'Grip package', category: 'Equipment Hire' },
+      { description: 'Sound package', category: 'Equipment Hire' },
+      { description: 'Unit vehicles', category: 'Travel & Transport' },
+      { description: 'Accommodation — crew', category: 'Accommodation' },
+      { description: 'Catering — Day 1', category: 'Catering / Craft Services' },
+      { description: 'Catering — Day 2', category: 'Catering / Craft Services' },
+      { description: 'Edit', category: 'Post Production' },
+      { description: 'Grade / Colour', category: 'Post Production' },
+      { description: 'Sound mix', category: 'Post Production' },
+      { description: 'VFX / Motion Graphics', category: 'Post Production' },
+      { description: 'Music licensing', category: 'Music / Licensing' },
+      { description: 'Contingency (10%)', category: 'Contingency' },
+    ],
+  },
+  campaign_shoot: {
+    label: 'Campaign Shoot',
+    items: [
+      { description: 'Director fee', category: 'Crew' },
+      { description: 'DOP fee', category: 'Crew' },
+      { description: 'Camera Operator', category: 'Crew' },
+      { description: '1st AC', category: 'Crew' },
+      { description: 'Gaffer', category: 'Crew' },
+      { description: 'Art Director', category: 'Art Direction / Props' },
+      { description: 'Wardrobe Stylist', category: 'Wardrobe / Styling' },
+      { description: 'Hair & Makeup', category: 'Hair & Makeup' },
+      { description: 'Lead talent — day rate', category: 'Cast / Talent' },
+      { description: 'Talent buyout — digital usage', category: 'Cast / Talent' },
+      { description: 'Talent buyout — broadcast usage', category: 'Cast / Talent' },
+      { description: 'Location fee', category: 'Locations / Permits' },
+      { description: 'Equipment hire', category: 'Equipment Hire' },
+      { description: 'Transport', category: 'Travel & Transport' },
+      { description: 'Catering', category: 'Catering / Craft Services' },
+      { description: 'Edit', category: 'Post Production' },
+      { description: 'Grade', category: 'Post Production' },
+      { description: 'Sound / Music', category: 'Music / Licensing' },
+      { description: 'Music licensing — digital', category: 'Music / Licensing' },
+      { description: 'Music licensing — broadcast', category: 'Music / Licensing' },
+      { description: 'Social media deliverables', category: 'Marketing / Deliverables' },
+      { description: 'Broadcast master delivery', category: 'Marketing / Deliverables' },
+      { description: 'Contingency (10%)', category: 'Contingency' },
+    ],
+  },
+}
 const COST_STATUSES: CostStatus[] = ['planned', 'confirmed', 'paid']
 
 const COST_STATUS_CLS: Record<CostStatus, string> = {
@@ -250,6 +356,17 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [expenseEditModal, setExpenseEditModal] = useState<Expense | null>(null)
   // Summary PDF overlay
   const [showSummaryPDF, setShowSummaryPDF] = useState(false)
+
+  // Project type (persisted in localStorage keyed by project code)
+  const [projectType, setProjectTypeState] = useState<ProjectType>(() => {
+    try {
+      const types = JSON.parse(localStorage.getItem('ledger_project_types') || '{}')
+      return (types[project.code] as ProjectType) || 'other'
+    } catch { return 'other' }
+  })
+
+  // Budget template picker
+  const [showTemplates, setShowTemplates] = useState(false)
 
   // Costs bulk selection
   const [costSelectedIds, setCostSelectedIds] = useState<Set<string>>(new Set())
@@ -897,6 +1014,156 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     a.download = `${code}-costs.csv`
     a.click()
     toast('CSV exported')
+  }
+
+  // ── Load budget template ──
+  async function loadBudgetTemplate(templateKey: string) {
+    const tpl = BUDGET_TEMPLATES[templateKey]
+    if (!tpl) return
+    const now = Date.now()
+    const items: ProjectCost[] = tpl.items.map((item, i) => ({
+      id: `${now}-${i}`,
+      project_code: code,
+      description: item.description,
+      category: item.category,
+      qty: 1,
+      estimated: 0,
+      actual: 0,
+      status: 'planned' as CostStatus,
+      notes: '',
+      sort_order: i,
+    }))
+    // Save to Supabase
+    const rows = items.map((c, i) => ({
+      id: c.id, project_code: code, description: c.description, category: c.category,
+      qty: 1, estimated: 0, actual: 0, status: 'planned', notes: '', sort_order: i,
+    }))
+    await sb.from('project_costs').upsert(rows)
+    setCosts(items)
+    setShowTemplates(false)
+    toast(`Loaded "${tpl.label}" template — edit amounts to match your budget`)
+  }
+
+  // ── Budget PDF export ──
+  function exportBudgetPDF() {
+    // Group costs by category
+    const categoryOrder = [...COST_CATEGORIES]
+    const grouped: Record<string, ProjectCost[]> = {}
+    for (const cat of categoryOrder) grouped[cat] = []
+    for (const c of costs) {
+      const cat = c.category as string
+      if (!grouped[cat]) grouped[cat] = []
+      grouped[cat].push(c)
+    }
+
+    const companyName = (() => {
+      try {
+        if (project.entity === '419Studios') return JSON.parse(localStorage.getItem('ledger_company_419') || '{}').name || '419Studios'
+        if (project.entity === 'RTW Records') return JSON.parse(localStorage.getItem('ledger_company_rtw') || '{}').name || 'RTW Records'
+        return JSON.parse(localStorage.getItem('ledger_company') || '{}').name || 'Actually Creative'
+      } catch { return 'Actually Creative' }
+    })()
+
+    const fmtN = (n: number) => '£' + n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+    let grandEst = 0, grandAct = 0
+    const categorySections = categoryOrder.map(cat => {
+      const items = grouped[cat] || []
+      if (items.length === 0) return ''
+      let catEst = 0, catAct = 0
+      const rows = items.map(c => {
+        const est = costTotal(c)
+        const act = c.actual || 0
+        const variance = est - act
+        catEst += est; catAct += act; grandEst += est; grandAct += act
+        const overBudget = act > 0 && act > est
+        const rowStyle = overBudget ? 'background:#fff0f0;' : ''
+        const varStyle = overBudget ? 'color:#c0392b;font-weight:600;' : variance > 0 ? 'color:#2c7a4e;' : ''
+        return `<tr style="${rowStyle}">
+          <td style="padding:5px 8px;font-size:11px;">${c.description}</td>
+          <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'Courier New',monospace;">${fmtN(est)}</td>
+          <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'Courier New',monospace;">${act > 0 ? fmtN(act) : '—'}</td>
+          <td style="padding:5px 8px;font-size:11px;text-align:right;font-family:'Courier New',monospace;${varStyle}">${act > 0 ? (overBudget ? `+${fmtN(act - est)}` : fmtN(variance)) : '—'}</td>
+        </tr>`
+      }).join('')
+      const catVariance = catEst - catAct
+      const catOver = catAct > 0 && catAct > catEst
+      return `
+        <tr style="background:#1a1a1a;">
+          <td colspan="4" style="padding:6px 8px;font-size:10px;font-weight:700;color:#fff;letter-spacing:0.08em;text-transform:uppercase;font-family:'Courier New',monospace;">${cat}</td>
+        </tr>
+        ${rows}
+        <tr style="background:#f0f0ee;border-top:1px solid #e2e2e0;">
+          <td style="padding:5px 8px;font-size:10px;font-style:italic;color:#9a9a9a;">Subtotal</td>
+          <td style="padding:5px 8px;font-size:10px;text-align:right;font-family:'Courier New',monospace;font-weight:600;">${fmtN(catEst)}</td>
+          <td style="padding:5px 8px;font-size:10px;text-align:right;font-family:'Courier New',monospace;font-weight:600;">${catAct > 0 ? fmtN(catAct) : '—'}</td>
+          <td style="padding:5px 8px;font-size:10px;text-align:right;font-family:'Courier New',monospace;font-weight:600;${catOver ? 'color:#c0392b;' : ''}">${catAct > 0 ? (catOver ? `+${fmtN(catAct - catEst)}` : fmtN(catVariance)) : '—'}</td>
+        </tr>
+        <tr><td colspan="4" style="padding:2px;"></td></tr>`
+    }).filter(Boolean).join('')
+
+    const grandVariance = grandEst - grandAct
+    const grandOver = grandAct > 0 && grandAct > grandEst
+
+    const html = `<!DOCTYPE html><html><head><title>${project.name} — Production Budget</title>
+    <style>
+      @page { size: A4; margin: 1.5cm; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: 'Arial', sans-serif; font-size: 12px; color: #1a1a1a; background: #fff; }
+      @media print { .no-print { display: none; } }
+    </style></head><body>
+    <div style="border-top:4px solid #1a1a1a;padding-top:16px;margin-bottom:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:18px;font-weight:700;letter-spacing:-0.02em;">${project.name}</div>
+          <div style="font-size:10px;color:#9a9a9a;margin-top:4px;letter-spacing:0.06em;text-transform:uppercase;font-family:'Courier New',monospace;">
+            Production Budget · ${project.entity} · ${fmtDate(project.start_date)}
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:10px;color:#9a9a9a;letter-spacing:0.06em;text-transform:uppercase;font-family:'Courier New',monospace;">Prepared by</div>
+          <div style="font-size:11px;font-weight:600;">${companyName}</div>
+          <div style="font-size:10px;color:#9a9a9a;margin-top:2px;font-family:'Courier New',monospace;">${new Date().toLocaleDateString('en-GB')}</div>
+        </div>
+      </div>
+      ${project.budget > 0 ? `<div style="margin-top:10px;padding:8px 12px;background:#f0f0ee;border-left:3px solid #1a1a1a;font-family:'Courier New',monospace;font-size:10px;">
+        APPROVED BUDGET: <strong>${fmtN(project.budget)}</strong>
+        ${grandEst > 0 ? ` &nbsp;·&nbsp; ESTIMATED: <strong>${fmtN(grandEst)}</strong>` : ''}
+        ${grandEst > project.budget ? ` &nbsp;·&nbsp; <span style="color:#c0392b;font-weight:700;">OVER BY ${fmtN(grandEst - project.budget)}</span>` : ''}
+      </div>` : ''}
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e2e2e0;">
+      <thead>
+        <tr style="background:#f0f0ee;border-bottom:2px solid #1a1a1a;">
+          <th style="padding:7px 8px;text-align:left;font-size:9px;font-family:'Courier New',monospace;letter-spacing:0.08em;text-transform:uppercase;">Line Item</th>
+          <th style="padding:7px 8px;text-align:right;font-size:9px;font-family:'Courier New',monospace;letter-spacing:0.08em;text-transform:uppercase;">Estimated</th>
+          <th style="padding:7px 8px;text-align:right;font-size:9px;font-family:'Courier New',monospace;letter-spacing:0.08em;text-transform:uppercase;">Actual</th>
+          <th style="padding:7px 8px;text-align:right;font-size:9px;font-family:'Courier New',monospace;letter-spacing:0.08em;text-transform:uppercase;">Variance</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${categorySections}
+        <tr style="background:#1a1a1a;border-top:2px solid #1a1a1a;">
+          <td style="padding:8px 8px;font-size:11px;font-weight:700;color:#fff;">TOTAL</td>
+          <td style="padding:8px 8px;font-size:11px;font-weight:700;color:#fff;text-align:right;font-family:'Courier New',monospace;">${fmtN(grandEst)}</td>
+          <td style="padding:8px 8px;font-size:11px;font-weight:700;color:#fff;text-align:right;font-family:'Courier New',monospace;">${grandAct > 0 ? fmtN(grandAct) : '—'}</td>
+          <td style="padding:8px 8px;font-size:11px;font-weight:700;text-align:right;font-family:'Courier New',monospace;color:${grandOver ? '#ff8080' : '#80ffb0'};">${grandAct > 0 ? (grandOver ? `+${fmtN(grandAct - grandEst)}` : fmtN(grandVariance)) : '—'}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div style="margin-top:40px;padding-top:10px;border-top:1px solid #e2e2e0;text-align:center;font-size:9px;color:#9a9a9a;font-family:'Courier New',monospace;">
+      This document is confidential and prepared by Actually Creative
+    </div>
+    </body></html>`
+
+    const printWin = window.open('', '_blank')
+    if (!printWin) { window.print(); return }
+    printWin.document.write(html)
+    printWin.document.close()
+    printWin.focus()
+    setTimeout(() => { printWin.print(); printWin.close() }, 500)
   }
 
   // ── Cost sorting ──
@@ -1889,9 +2156,23 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                     <span className="font-mono text-[10px] text-muted italic">Add Anthropic key in Settings to bulk-extract</span>
                   )}
                   {costs.length > 0 && (
-                    <button onClick={exportCostsCSV}
-                      className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
-                      <Download size={11} /> CSV
+                    <>
+                      <button onClick={exportCostsCSV}
+                        className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
+                        <Download size={11} /> CSV
+                      </button>
+                      <button onClick={exportBudgetPDF}
+                        className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors">
+                        <Printer size={11} /> Budget PDF
+                      </button>
+                    </>
+                  )}
+                  {costs.length === 0 && !addingCost && (
+                    <button
+                      onClick={() => setShowTemplates(s => !s)}
+                      className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors"
+                    >
+                      <Table2 size={11} /> Template
                     </button>
                   )}
                   <button
@@ -1948,7 +2229,31 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
               )}
 
               {costs.length === 0 && !addingCost ? (
-                <p className="font-mono text-xs text-muted text-center py-12 uppercase tracking-wider">No costs yet</p>
+                <div className="py-12 text-center space-y-4">
+                  <p className="font-mono text-xs text-muted uppercase tracking-wider">No costs yet</p>
+                  <div className="flex flex-col items-center gap-2">
+                    <button
+                      onClick={() => setShowTemplates(s => !s)}
+                      className="flex items-center gap-1.5 px-4 py-2 border border-rule font-mono text-xs text-muted hover:text-ink hover:border-ink transition-colors"
+                    >
+                      <Table2 size={11} /> Load budget template
+                    </button>
+                    {showTemplates && (
+                      <div className="border border-rule bg-white shadow-sm w-64 overflow-hidden">
+                        {Object.entries(BUDGET_TEMPLATES).map(([key, tpl]) => (
+                          <button
+                            key={key}
+                            onClick={() => loadBudgetTemplate(key)}
+                            className="w-full text-left px-4 py-2.5 text-xs font-mono hover:bg-cream border-b border-rule last:border-0 transition-colors"
+                          >
+                            <span className="font-semibold text-ink">{tpl.label}</span>
+                            <span className="text-muted ml-1">· {tpl.items.length} line items</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <DragDropContext onDragEnd={costCategoryFilter ? () => {} : handleDragEnd}>
                   <Droppable droppableId="costs" isDropDisabled={!!costCategoryFilter}>
