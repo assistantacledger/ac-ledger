@@ -15,7 +15,7 @@ import { ProjectInvoicesTab } from './ProjectInvoicesTab'
 import { ProjectWhiteboard } from './ProjectWhiteboard'
 import { FilePreviewOverlay } from '@/components/ui/FilePreviewOverlay'
 import { sb } from '@/lib/supabase'
-import { cn, fmt, fmtDate, todayISO } from '@/lib/format'
+import { cn, fmt, fmtDate, todayISO, logAndExtract } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import { printViaNewWindow } from '@/lib/print'
 import { InvoiceModal } from '@/components/invoices/InvoiceModal'
@@ -841,7 +841,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
       const path = `projects/${code}/${Date.now()}-${safeName}`
       const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: false })
-      if (error) throw error
+      if (error) {
+        throw new Error(logAndExtract('[file upload] storage error:', error))
+      }
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
       const now = new Date().toISOString()
       const fileType: 'image' | 'pdf' = file.type.startsWith('image/') ? 'image' : 'pdf'
@@ -857,7 +859,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         setFiles(prev => [fileRow as ProjectFile, ...prev])
       }
     } catch (e) {
-      alert(`Upload failed: ${String(e)}`)
+      toast(`Upload failed: ${logAndExtract('[file upload] failed:', e)}`, 'error')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -952,8 +954,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
       const { error: storageError } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
       if (storageError) {
-        console.error('[receipt upload] storage error:', storageError)
-        throw new Error(storageError.message)
+        const msg = logAndExtract('[receipt upload] storage error:', storageError)
+        throw new Error(msg)
       }
 
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
@@ -967,8 +969,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
         .update(patch)
         .eq('id', costId)
       if (dbError) {
-        console.error('[receipt upload] db error:', dbError)
-        throw new Error(dbError.message)
+        const msg = logAndExtract('[receipt upload] db error:', dbError)
+        throw new Error(msg)
       }
 
       console.log('[receipt upload] saved to project_costs OK')
@@ -978,8 +980,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       setReceiptSavedId(costId)
       setTimeout(() => setReceiptSavedId(null), 2500)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      console.error('[receipt upload] failed:', msg)
+      const msg = logAndExtract('[receipt upload] failed:', e)
       toast(`Upload failed: ${msg}`, 'error')
     } finally {
       setUploadingReceipt(null)
@@ -1308,14 +1309,16 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
       const path = `receipts/${Date.now()}-${safeName}`
       const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: false })
-      if (error) throw error
+      if (error) {
+        throw new Error(logAndExtract('[expense receipt upload] storage error:', error))
+      }
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
       const exp = projExpenses.find(e => e.id === expId)
       const existing = exp?.receipt_urls ?? []
       await sb.from('expenses').update({ receipt_urls: [...existing, urlData.publicUrl] }).eq('id', expId)
       toast('Receipt added')
     } catch (e) {
-      alert(`Upload failed: ${String(e)}`)
+      toast(`Upload failed: ${logAndExtract('[expense receipt upload] failed:', e)}`, 'error')
     } finally {
       setAddingReceiptExpense(null)
     }

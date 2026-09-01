@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { sb } from '@/lib/supabase'
 import { toast } from '@/lib/toast'
+import { logAndExtract } from '@/lib/format'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -433,7 +434,7 @@ export function ProjectWhiteboard({ projectCode }: Props) {
           return next
         })
       } catch (err) {
-        toast(`Image upload failed: ${String(err)}`, 'error')
+        toast(`Image upload failed: ${logAndExtract('[whiteboard image upload] failed:', err)}`, 'error')
       }
     }
     setUploadingImage(false)

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Upload, X, FileText, ImageIcon } from 'lucide-react'
 import { sb } from '@/lib/supabase'
 import { Modal } from '@/components/ui/Modal'
-import { cn, fmt, todayISO } from '@/lib/format'
+import { cn, fmt, todayISO, logAndExtract } from '@/lib/format'
 import type { Expense, ExpenseInsert, ExpenseStatus, Entity, ExpenseLineItem, BankDetails } from '@/types'
 import { ENTITIES } from '@/types'
 import { useEmployeeProfiles } from '@/hooks/useEmployeeProfiles'
@@ -144,11 +144,13 @@ export function ExpenseModal({ isOpen, onClose, expense, prefillEmployee, prefil
       const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
       const path = `receipts/${Date.now()}-${safe}`
       const { error: uploadError } = await sb.storage.from('invoices').upload(path, file, { upsert: false })
-      if (uploadError) throw uploadError
+      if (uploadError) {
+        throw new Error(logAndExtract('[expense modal receipt upload] storage error:', uploadError))
+      }
       const { data } = sb.storage.from('invoices').getPublicUrl(path)
       setReceiptUrls(prev => [...prev, data.publicUrl])
     } catch (e) {
-      setError(`Receipt upload failed: ${String(e)}`)
+      setError(`Receipt upload failed: ${logAndExtract('[expense modal receipt upload] failed:', e)}`)
     } finally {
       setReceiptUploading(false)
       if (receiptInputRef.current) receiptInputRef.current.value = ''

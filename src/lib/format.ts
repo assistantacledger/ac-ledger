@@ -81,3 +81,22 @@ import { twMerge } from 'tailwind-merge'
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
+
+// ─── Error extraction ─────────────────────────────────────────────────────────
+// Supabase errors are objects, not Error instances — String(err) gives "[object Object]"
+
+export function extractErrorMessage(e: unknown): string {
+  if (!e) return 'Unknown error'
+  if (typeof e === 'string') return e
+  if (e instanceof Error) return e.message
+  // Supabase StorageError / PostgREST error shape
+  const obj = e as Record<string, unknown>
+  const msg = obj['message'] ?? obj['error_description'] ?? obj['error'] ?? obj['msg']
+  if (msg && typeof msg === 'string') return msg
+  try { return JSON.stringify(e) } catch { return 'Unknown error' }
+}
+
+export function logAndExtract(label: string, e: unknown): string {
+  console.error(label, JSON.stringify(e, null, 2))
+  return extractErrorMessage(e)
+}
