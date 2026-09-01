@@ -320,6 +320,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   const [notes, setNotes] = useState<ProjectNote[]>([])
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
+  const [savingNote, setSavingNote] = useState(false)
+  const [noteSaved, setNoteSaved] = useState(false)
 
   // Files
   const [files, setFiles] = useState<ProjectFile[]>([])
@@ -797,18 +799,26 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   // ── Notes ──
   async function saveNote() {
     const trimmed = noteText.trim()
-    if (!trimmed) return
+    if (!trimmed || savingNote) return
+    setSavingNote(true)
     const now = new Date().toISOString()
     const { data, error } = await sb.from('project_notes').insert({
       project_code: code,
       text: trimmed,
       created_at: now,
     }).select().single()
-    if (!error && data) {
+    setSavingNote(false)
+    if (error) {
+      toast(`Failed to save note: ${error.message}`, 'error')
+      return
+    }
+    if (data) {
       setNotes(prev => [data as ProjectNote, ...prev])
     }
     setNoteText('')
     setAddingNote(false)
+    setNoteSaved(true)
+    setTimeout(() => setNoteSaved(false), 2500)
   }
 
   async function deleteNote(id: string) {
@@ -923,7 +933,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     setUploadingReceipt(costId)
     try {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const path = `projects/${code}/costs/${costId}-${Date.now()}-${safeName}`
+      const path = `receipts/${costId}-${Date.now()}-${safeName}`
       const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
       if (error) throw error
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
@@ -3189,7 +3199,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
             {/* ── Notes ── */}
             <div>
               <div className="flex items-center justify-between mb-4">
-                <p className="tbl-lbl">Notes</p>
+                <div className="flex items-center gap-3">
+                  <p className="tbl-lbl">Notes</p>
+                  {noteSaved && (
+                    <span className="font-mono text-[10px] text-ac-green uppercase tracking-wider">Saved ✓</span>
+                  )}
+                </div>
                 {!addingNote && (
                   <button
                     onClick={() => setAddingNote(true)}
@@ -3213,12 +3228,12 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                   />
                   <div className="flex items-center justify-between px-4 py-2 border-t border-rule bg-cream">
                     <span className="font-mono text-[10px] text-muted">⌘ + Enter to save</span>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       <button onClick={() => { setAddingNote(false); setNoteText('') }}
                         className="font-mono text-xs text-muted hover:text-ink transition-colors">Cancel</button>
-                      <button onClick={saveNote}
-                        className="px-3 py-1 bg-ink text-white font-mono text-xs uppercase tracking-wider hover:bg-[#333] transition-colors">
-                        Save Note
+                      <button onClick={saveNote} disabled={savingNote}
+                        className="px-3 py-1 bg-ink text-white font-mono text-xs uppercase tracking-wider hover:bg-[#333] transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                        {savingNote ? 'Saving…' : 'Save Note'}
                       </button>
                     </div>
                   </div>
