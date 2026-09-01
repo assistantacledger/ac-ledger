@@ -339,6 +339,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   })
   const [addingCost, setAddingCost] = useState(false)
   const [uploadingReceipt, setUploadingReceipt] = useState<string | null>(null)
+  const [receiptSavedId, setReceiptSavedId] = useState<string | null>(null)
   const [creatingExpense, setCreatingExpense] = useState<string | null>(null)
 
   // Quick-add modals
@@ -717,9 +718,8 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   // Load from Supabase
   useEffect(() => {
-    // Load notes
-    sb.from('project_notes').select('*').eq('project_code', code).order('created_at', { ascending: false })
-      .then(({ data }) => { if (data) setNotes(data as ProjectNote[]) })
+    // Load notes — always fetch fresh from Supabase, never rely on local state across project changes
+    void loadNotes()
     // Load files
     sb.from('project_files').select('*').eq('project_code', code).order('uploaded_at', { ascending: false })
       .then(({ data }) => { if (data) setFiles(data as ProjectFile[]) })
@@ -797,24 +797,28 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
   }
 
   // ── Notes ──
+  async function loadNotes() {
+    const { data } = await sb.from('project_notes').select('*').eq('project_code', code).order('created_at', { ascending: false })
+    if (data) setNotes(data as ProjectNote[])
+  }
+
   async function saveNote() {
     const trimmed = noteText.trim()
     if (!trimmed || savingNote) return
     setSavingNote(true)
-    const now = new Date().toISOString()
-    const { data, error } = await sb.from('project_notes').insert({
+    const { error } = await sb.from('project_notes').insert({
+      id: crypto.randomUUID(),
       project_code: code,
       text: trimmed,
-      created_at: now,
-    }).select().single()
+      created_at: new Date().toISOString(),
+    })
     setSavingNote(false)
     if (error) {
       toast(`Failed to save note: ${error.message}`, 'error')
       return
     }
-    if (data) {
-      setNotes(prev => [data as ProjectNote, ...prev])
-    }
+    // Re-fetch from Supabase to confirm the write persisted
+    await loadNotes()
     setNoteText('')
     setAddingNote(false)
     setNoteSaved(true)
@@ -924,7 +928,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     void saveCosts(reordered)
   }
 
-  // Receipt upload per cost
+  // Receipt upload per cost — targeted DB update (not bulk upsert) to avoid stale-closure races
   async function handleCostReceiptUpload(costId: string, file: File) {
     if (!file.type.match(/^(image\/(jpeg|png|gif|webp)|application\/pdf)$/)) {
       alert('Only JPG, PNG, GIF, WebP, and PDF files are supported.')
@@ -934,16 +938,25 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     try {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
       const path = `receipts/${costId}-${Date.now()}-${safeName}`
-      const { error } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
-      if (error) throw error
+      const { error: storageError } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
+      if (storageError) throw storageError
+
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
-      updateCost(costId, {
-        receipt_url: urlData.publicUrl,
-        receipt_path: path,
-        receipt_type: file.type.startsWith('image/') ? 'image' : 'pdf',
-      })
+      const receiptType: 'image' | 'pdf' = file.type.startsWith('image/') ? 'image' : 'pdf'
+      const patch = { receipt_url: urlData.publicUrl, receipt_path: path, receipt_type: receiptType }
+
+      // Directly update just this row — never rely on bulk upsert for receipt fields
+      const { error: dbError } = await sb.from('project_costs')
+        .update(patch)
+        .eq('id', costId)
+      if (dbError) throw dbError
+
+      // Update local state only after confirmed DB write
+      setCosts(prev => prev.map(c => c.id === costId ? { ...c, ...patch } : c))
+      setReceiptSavedId(costId)
+      setTimeout(() => setReceiptSavedId(null), 2500)
     } catch (e) {
-      alert(`Upload failed: ${String(e)}`)
+      toast(`Upload failed: ${String(e)}`, 'error')
     } finally {
       setUploadingReceipt(null)
     }
@@ -966,7 +979,13 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
     const cost = costs.find(c => c.id === costId)
     if (!cost?.receipt_path) return
     try { await sb.storage.from('invoices').remove([cost.receipt_path]) } catch { /* ignore */ }
-    updateCost(costId, { receipt_url: undefined, receipt_path: undefined, receipt_type: undefined })
+    await sb.from('project_costs')
+      .update({ receipt_url: null, receipt_path: null, receipt_type: null })
+      .eq('id', costId)
+    setCosts(prev => prev.map(c => c.id === costId
+      ? { ...c, receipt_url: undefined, receipt_path: undefined, receipt_type: undefined }
+      : c
+    ))
   }
 
   // Create Supabase expense from cost
@@ -2505,7 +2524,9 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                   {/* Receipt icon */}
                                   <div className="w-8 flex-shrink-0 flex items-center justify-center" onClick={e => e.stopPropagation()}>
                                     {uploadingReceipt === cost.id ? (
-                                      <div className="w-3 h-3 border border-rule border-t-muted animate-spin" />
+                                      <div className="w-3 h-3 border border-rule border-t-muted animate-spin" title="Saving…" />
+                                    ) : receiptSavedId === cost.id ? (
+                                      <span className="font-mono text-[9px] text-ac-green" title="Saved">✓</span>
                                     ) : cost.receipt_url ? (
                                       <button
                                         onClick={() => setLightboxUrl({ url: cost.receipt_url!, name: cost.description })}
@@ -2626,7 +2647,7 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
                                           className="flex items-center gap-1 font-mono text-xs text-muted hover:text-ink transition-colors disabled:opacity-50"
                                         >
                                           <Upload size={11} />
-                                          {uploadingReceipt === cost.id ? 'Uploading…' : 'Upload receipt'}
+                                          {uploadingReceipt === cost.id ? 'Saving…' : receiptSavedId === cost.id ? 'Saved ✓' : 'Upload receipt'}
                                         </button>
                                       )}
                                     </div>
