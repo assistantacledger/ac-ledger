@@ -930,33 +930,57 @@ export function ProjectDetail({ project, invoices, expenses, onBack, onEdit, onD
 
   // Receipt upload per cost — targeted DB update (not bulk upsert) to avoid stale-closure races
   async function handleCostReceiptUpload(costId: string, file: File) {
+    // File type check
     if (!file.type.match(/^(image\/(jpeg|png|gif|webp)|application\/pdf)$/)) {
-      alert('Only JPG, PNG, GIF, WebP, and PDF files are supported.')
+      toast('Only JPG, PNG, GIF, WebP, and PDF files are supported.', 'error')
       return
     }
+    // File size check (50 MB limit)
+    if (file.size > 50 * 1024 * 1024) {
+      toast('File is too large. Maximum size is 50 MB.', 'error')
+      return
+    }
+
     setUploadingReceipt(costId)
+    setReceiptSavedId(null)
     try {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const path = `receipts/${costId}-${Date.now()}-${safeName}`
+      // Path format: projects/{projectCode}/costs/{costId}-{filename} (no leading slash)
+      const path = `projects/${code}/costs/${costId}-${safeName}`
+
+      console.log('[receipt upload] bucket=invoices path=', path, 'size=', file.size, 'type=', file.type)
+
       const { error: storageError } = await sb.storage.from('invoices').upload(path, file, { upsert: true })
-      if (storageError) throw storageError
+      if (storageError) {
+        console.error('[receipt upload] storage error:', storageError)
+        throw new Error(storageError.message)
+      }
 
       const { data: urlData } = sb.storage.from('invoices').getPublicUrl(path)
+      console.log('[receipt upload] public URL:', urlData.publicUrl)
+
       const receiptType: 'image' | 'pdf' = file.type.startsWith('image/') ? 'image' : 'pdf'
       const patch = { receipt_url: urlData.publicUrl, receipt_path: path, receipt_type: receiptType }
 
-      // Directly update just this row — never rely on bulk upsert for receipt fields
+      // Directly update just this row in project_costs — persists receipt_url immediately
       const { error: dbError } = await sb.from('project_costs')
         .update(patch)
         .eq('id', costId)
-      if (dbError) throw dbError
+      if (dbError) {
+        console.error('[receipt upload] db error:', dbError)
+        throw new Error(dbError.message)
+      }
+
+      console.log('[receipt upload] saved to project_costs OK')
 
       // Update local state only after confirmed DB write
       setCosts(prev => prev.map(c => c.id === costId ? { ...c, ...patch } : c))
       setReceiptSavedId(costId)
       setTimeout(() => setReceiptSavedId(null), 2500)
     } catch (e) {
-      toast(`Upload failed: ${String(e)}`, 'error')
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[receipt upload] failed:', msg)
+      toast(`Upload failed: ${msg}`, 'error')
     } finally {
       setUploadingReceipt(null)
     }
